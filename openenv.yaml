@@ -1,0 +1,12 @@
+name: "soc_analyst"
+version: "1.0.0"
+description: "SOC Analyst Incident Triage Environment"
+authors:
+  - "User <user@example.com>"
+tags:
+  - security
+  - soc
+  - triage
+  - text-based
+entrypoint: "server.app:app"
+supports_concurrent_sessions: true
