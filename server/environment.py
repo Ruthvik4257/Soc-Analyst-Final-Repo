@@ -15,7 +15,13 @@ class SocAnalystEnvironment(Environment):
         self._state = SocState()
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> SocObservation:
-        difficulty = kwargs.get("difficulty", "easy")
+        # Accept difficulty from both direct and nested reset payloads.
+        difficulty = kwargs.get("difficulty")
+        if difficulty is None and isinstance(kwargs.get("options"), dict):
+            difficulty = kwargs["options"].get("difficulty")
+        if difficulty is None and isinstance(kwargs.get("config"), dict):
+            difficulty = kwargs["config"].get("difficulty")
+        difficulty = difficulty or "easy"
         
         # Reset state completely
         self._state = SocState(
