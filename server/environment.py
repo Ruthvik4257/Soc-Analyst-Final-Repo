@@ -14,6 +14,25 @@ class SocAnalystEnvironment(Environment):
     def __init__(self):
         self._state = SocState()
 
+    def _resolve_expected_decision(self) -> str:
+        """Recover expected decision if state is missing it."""
+        if self._state.expected_decision:
+            return self._state.expected_decision
+
+        alert_type = (self._state.alert or {}).get("type")
+        if alert_type == "brute_force":
+            return "block_if_malicious"
+        if alert_type == "malware_detected":
+            return "escalate_tier2"
+        if alert_type == "impossible_travel":
+            return "false_positive"
+
+        if self._state.difficulty == "easy":
+            return "block_if_malicious"
+        if self._state.difficulty == "medium":
+            return "escalate_tier2"
+        return "false_positive"
+
     def reset(self, seed=None, episode_id=None, **kwargs) -> SocObservation:
         # Accept difficulty from both direct and nested reset payloads.
         difficulty = kwargs.get("difficulty")
@@ -114,7 +133,9 @@ class SocAnalystEnvironment(Environment):
                 
         elif at == "take_action":
             done = True
-            if action.decision == self._state.expected_decision:
+            expected = self._resolve_expected_decision()
+            self._state.expected_decision = expected
+            if action.decision == expected:
                 if self._state.difficulty == "hard" and "ti_checked" not in self._state.evidence_collected:
                     message = f"You guessed {action.decision} but didn't check threat intel to verify! Score: 0.1."
                     reward = 0.1
@@ -124,7 +145,7 @@ class SocAnalystEnvironment(Environment):
                     reward = 0.99
                     self._state.score = 0.99
             else:
-                message = f"Incorrect decision: {action.decision}. Expected: {self._state.expected_decision}."
+                message = f"Incorrect decision: {action.decision}. Expected: {expected}."
                 reward = -0.5
                 # Keep task scores strictly within (0, 1) for OpenEnv validators.
                 self._state.score = 0.01

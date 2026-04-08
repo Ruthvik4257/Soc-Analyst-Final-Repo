@@ -372,7 +372,11 @@
                 if(data.reward > 0) logType = "reward";
                 if(obs.done) logType = (data.reward > 0) ? "reward" : "system";
 
-                addLog("ENVIRONMENT", obs.message + (data.reward ? `\n[Reward: +${data.reward}]` : ""), logType);
+                const reward = Number(data.reward);
+                const rewardText = Number.isFinite(reward)
+                    ? `\n[Reward: ${reward >= 0 ? "+" : ""}${reward}]`
+                    : "";
+                addLog("ENVIRONMENT", obs.message + rewardText, logType);
                 updateStateWindow(obs);
 
             } catch (err) {
