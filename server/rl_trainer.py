@@ -9,8 +9,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from huggingface_hub import login
-from transformers import AutoTokenizer
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+try:
+    from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
+    TRL_BACKEND = "ppo"
+except Exception:
+    AutoModelForCausalLMWithValueHead = AutoModelForCausalLM  # type: ignore[assignment]
+    PPOConfig = None  # type: ignore[assignment]
+    PPOTrainer = None  # type: ignore[assignment]
+    TRL_BACKEND = "fallback_no_ppo"
 
 from models import SocAction
 from server.datasets import search_uploaded_logs
@@ -35,6 +43,7 @@ class TrainingStatus:
     memory_consistency_score: float = 0.0
     delayed_reward_success_rate: float = 0.0
     campaign_progress: float = 0.0
+    training_backend: str = TRL_BACKEND
     policy_mode: str = "single_policy"
     role_model_names: Dict[str, str] = None  # type: ignore[assignment]
     per_role_last_rewards: Dict[str, float] = None  # type: ignore[assignment]
@@ -96,7 +105,7 @@ def _parse_spl(text: str, fallback: str) -> str:
     return candidate if candidate.startswith("search ") else f"search {candidate}"
 
 
-def _sample_text(trainer: PPOTrainer, tokenizer: AutoTokenizer, prompt: str, device: str, max_new_tokens: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
+def _sample_text(trainer: Any, tokenizer: AutoTokenizer, prompt: str, device: str, max_new_tokens: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
     query_tensors = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
     generated = trainer.model.generate(query_tensors, max_new_tokens=max_new_tokens, do_sample=True)
     response_tensors = generated[:, query_tensors.shape[1] :]
@@ -109,18 +118,21 @@ def _init_role_trainers(
     learning_rate: float,
     tokenizer: AutoTokenizer,
     device: str,
-) -> Dict[str, PPOTrainer]:
-    role_trainers: Dict[str, PPOTrainer] = {}
+) -> Dict[str, Any]:
+    role_trainers: Dict[str, Any] = {}
     for role in ("supervisor", "log_hunter", "threat_intel"):
         model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
         model.to(device)
-        cfg = PPOConfig(batch_size=1, mini_batch_size=1, learning_rate=learning_rate)
-        role_trainers[role] = PPOTrainer(config=cfg, model=model, tokenizer=tokenizer)
+        if PPOTrainer is not None and PPOConfig is not None:
+            cfg = PPOConfig(batch_size=1, mini_batch_size=1, learning_rate=learning_rate)
+            role_trainers[role] = PPOTrainer(config=cfg, model=model, tokenizer=tokenizer)
+        else:
+            role_trainers[role] = model
     return role_trainers
 
 
 def _train_single_agent_episode(
-    trainer: PPOTrainer,
+    trainer: Any,
     tokenizer: AutoTokenizer,
     env: SocAnalystEnvironment,
     reset_obs: Any,
@@ -128,21 +140,25 @@ def _train_single_agent_episode(
 ) -> Tuple[float, Dict[str, Any]]:
     alert_details = reset_obs.alert_details
     loghunter_prompt = _build_loghunter_prompt(alert_details)
-    query_tensors, response_tensors, generated_text = _sample_text(
-        trainer, tokenizer, loghunter_prompt, device, max_new_tokens=40
-    )
+    query_tensors = tokenizer(loghunter_prompt, return_tensors="pt").input_ids.to(device)
+    generated = trainer.model.generate(query_tensors, max_new_tokens=40, do_sample=True) if hasattr(trainer, "model") else trainer.generate(query_tensors, max_new_tokens=40, do_sample=True)
+    response_tensors = generated[:, query_tensors.shape[1] :]
+    generated_text = tokenizer.decode(generated[0], skip_special_tokens=True)
     spl_query = _parse_spl(generated_text, fallback=f"search index=main {alert_details.get('id', '')}")
     logs = _resolve_logs_for_query(spl_query)
 
     supervisor_prompt = _build_supervisor_prompt(alert_details, logs)
-    _, _, supervisor_text = _sample_text(trainer, tokenizer, supervisor_prompt, device, max_new_tokens=20)
+    sup_query_tensors = tokenizer(supervisor_prompt, return_tensors="pt").input_ids.to(device)
+    sup_generated = trainer.model.generate(sup_query_tensors, max_new_tokens=20, do_sample=True) if hasattr(trainer, "model") else trainer.generate(sup_query_tensors, max_new_tokens=20, do_sample=True)
+    supervisor_text = tokenizer.decode(sup_generated[0], skip_special_tokens=True)
     decision = _parse_decision(supervisor_text, default=random.choice(["escalate_tier2", "block_if_malicious"]))
 
     final_obs = env.step(
         SocAction(action_type="take_action", decision=decision, reason="SupervisorAgent final decision")
     )
     reward_value = float(final_obs.reward)
-    trainer.step([query_tensors[0]], [response_tensors[0]], [torch.tensor(reward_value, device=device)])
+    if hasattr(trainer, "step"):
+        trainer.step([query_tensors[0]], [response_tensors[0]], [torch.tensor(reward_value, device=device)])
     episode_metrics = {
         "coordination_efficiency": 0.0,
         "evidence_sufficiency": 0.0,
@@ -152,7 +168,7 @@ def _train_single_agent_episode(
 
 
 def _train_multi_agent_episode(
-    role_trainers: Dict[str, PPOTrainer],
+    role_trainers: Dict[str, Any],
     tokenizer: AutoTokenizer,
     env: SocAnalystEnvironment,
     reset_obs: Any,
@@ -164,12 +180,19 @@ def _train_multi_agent_episode(
     role_last_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
 
     def generate_for_role(role: str, prompt: str, max_new_tokens: int = 32) -> Tuple[torch.Tensor, torch.Tensor, str]:
-        trainer = role_trainers[role]
-        return _sample_text(trainer, tokenizer, prompt, device, max_new_tokens=max_new_tokens)
+        role_obj = role_trainers[role]
+        if hasattr(role_obj, "model"):
+            return _sample_text(role_obj, tokenizer, prompt, device, max_new_tokens=max_new_tokens)
+        query_tensors = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+        generated = role_obj.generate(query_tensors, max_new_tokens=max_new_tokens, do_sample=True)
+        response_tensors = generated[:, query_tensors.shape[1] :]
+        text = tokenizer.decode(generated[0], skip_special_tokens=True)
+        return query_tensors, response_tensors, text
 
     def ppo_step_for_role(role: str, query_tensors: torch.Tensor, response_tensors: torch.Tensor, reward_value: float) -> None:
-        trainer = role_trainers[role]
-        trainer.step([query_tensors[0]], [response_tensors[0]], [torch.tensor(reward_value, device=device)])
+        role_obj = role_trainers[role]
+        if hasattr(role_obj, "step"):
+            role_obj.step([query_tensors[0]], [response_tensors[0]], [torch.tensor(reward_value, device=device)])
         role_last_rewards[role] = reward_value
 
     # Supervisor delegates to log hunter using supervisor-specific policy.
@@ -348,9 +371,10 @@ def _train_multi_agent_episode(
     )
 
     reward_value = float(final_obs.reward)
-    role_trainers["supervisor"].step(
-        [query_tensors[0]], [response_tensors[0]], [torch.tensor(reward_value, device=device)]
-    )
+    if hasattr(role_trainers["supervisor"], "step"):
+        role_trainers["supervisor"].step(
+            [query_tensors[0]], [response_tensors[0]], [torch.tensor(reward_value, device=device)]
+        )
     role_last_rewards["supervisor"] = reward_value
     metrics = final_obs.episode_metrics.model_dump() if final_obs.episode_metrics else {}
     metrics["per_role_last_rewards"] = role_last_rewards
@@ -385,6 +409,7 @@ def run_training_loop(
     TRAINING_STATUS.last_message = "Training initialized"
     TRAINING_STATUS.model_name = resolved_model_name
     TRAINING_STATUS.mode = training_mode
+    TRAINING_STATUS.training_backend = TRL_BACKEND
     TRAINING_STATUS.policy_mode = "multi_policy_by_role" if training_mode in ("multi_agent", "campaign") else "single_policy"
     TRAINING_STATUS.run_seed = seed
     TRAINING_STATUS.per_agent_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
@@ -405,8 +430,11 @@ def run_training_loop(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     policy_model = AutoModelForCausalLMWithValueHead.from_pretrained(resolved_model_name)
     policy_model.to(device)
-    ppo_config = PPOConfig(batch_size=1, mini_batch_size=1, learning_rate=resolved_learning_rate)
-    trainer = PPOTrainer(config=ppo_config, model=policy_model, tokenizer=tokenizer)
+    if PPOTrainer is not None and PPOConfig is not None:
+        ppo_config = PPOConfig(batch_size=1, mini_batch_size=1, learning_rate=resolved_learning_rate)
+        trainer: Any = PPOTrainer(config=ppo_config, model=policy_model, tokenizer=tokenizer)
+    else:
+        trainer = policy_model
     role_trainers: Optional[Dict[str, PPOTrainer]] = None
     if training_mode in ("multi_agent", "campaign"):
         role_trainers = _init_role_trainers(
@@ -506,7 +534,10 @@ def run_training_loop(
             role_dir.mkdir(parents=True, exist_ok=True)
             for role, role_trainer in role_trainers.items():
                 role_path = role_dir / role
-                role_trainer.model.save_pretrained(str(role_path))
+                if hasattr(role_trainer, "model"):
+                    role_trainer.model.save_pretrained(str(role_path))
+                else:
+                    role_trainer.save_pretrained(str(role_path))
         report = {
             "mode": training_mode,
             "model_name": resolved_model_name,
