@@ -3,7 +3,7 @@ pydantic>=2.0.0
 fastapi
 uvicorn
 openai
-trl>=0.8.0,<1.0.0
+trl==0.8.6
 torch>=2.0.0
 transformers>=4.38.0,<5.0.0
 peft>=0.7.0
