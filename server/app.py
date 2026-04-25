@@ -41,6 +41,9 @@ except Exception as exc:  # pragma: no cover - keeps API bootable when RL stack 
         campaign_progress = 0.0
         delayed_reward_success_rate = 0.0
         per_agent_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
+        policy_mode = "single_policy"
+        role_model_names = {"supervisor": "", "log_hunter": "", "threat_intel": ""}
+        per_role_last_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
         report_path = ""
         training_history = []
 
@@ -228,6 +231,9 @@ def training_status():
         "campaign_progress": TRAINING_STATUS.campaign_progress,
         "delayed_reward_success_rate": TRAINING_STATUS.delayed_reward_success_rate,
         "per_agent_rewards": TRAINING_STATUS.per_agent_rewards,
+        "policy_mode": TRAINING_STATUS.policy_mode,
+        "role_model_names": TRAINING_STATUS.role_model_names,
+        "per_role_last_rewards": TRAINING_STATUS.per_role_last_rewards,
         "report_path": TRAINING_STATUS.report_path,
     }
 
@@ -247,6 +253,9 @@ def eval_report():
         "campaign_progress": TRAINING_STATUS.campaign_progress,
         "delayed_reward_success_rate": TRAINING_STATUS.delayed_reward_success_rate,
         "per_agent_rewards": TRAINING_STATUS.per_agent_rewards,
+        "policy_mode": TRAINING_STATUS.policy_mode,
+        "role_model_names": TRAINING_STATUS.role_model_names,
+        "per_role_last_rewards": TRAINING_STATUS.per_role_last_rewards,
         "history": TRAINING_STATUS.training_history,
         "report_path": TRAINING_STATUS.report_path,
     }

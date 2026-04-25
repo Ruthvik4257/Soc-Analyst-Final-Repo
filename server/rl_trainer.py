@@ -35,12 +35,19 @@ class TrainingStatus:
     memory_consistency_score: float = 0.0
     delayed_reward_success_rate: float = 0.0
     campaign_progress: float = 0.0
+    policy_mode: str = "single_policy"
+    role_model_names: Dict[str, str] = None  # type: ignore[assignment]
+    per_role_last_rewards: Dict[str, float] = None  # type: ignore[assignment]
     report_path: str = ""
     training_history: List[Dict[str, Any]] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.per_agent_rewards is None:
             self.per_agent_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
+        if self.role_model_names is None:
+            self.role_model_names = {"supervisor": "", "log_hunter": "", "threat_intel": ""}
+        if self.per_role_last_rewards is None:
+            self.per_role_last_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
         if self.training_history is None:
             self.training_history = []
 
@@ -97,6 +104,21 @@ def _sample_text(trainer: PPOTrainer, tokenizer: AutoTokenizer, prompt: str, dev
     return query_tensors, response_tensors, text
 
 
+def _init_role_trainers(
+    model_name: str,
+    learning_rate: float,
+    tokenizer: AutoTokenizer,
+    device: str,
+) -> Dict[str, PPOTrainer]:
+    role_trainers: Dict[str, PPOTrainer] = {}
+    for role in ("supervisor", "log_hunter", "threat_intel"):
+        model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
+        model.to(device)
+        cfg = PPOConfig(batch_size=1, mini_batch_size=1, learning_rate=learning_rate)
+        role_trainers[role] = PPOTrainer(config=cfg, model=model, tokenizer=tokenizer)
+    return role_trainers
+
+
 def _train_single_agent_episode(
     trainer: PPOTrainer,
     tokenizer: AutoTokenizer,
@@ -130,7 +152,7 @@ def _train_single_agent_episode(
 
 
 def _train_multi_agent_episode(
-    trainer: PPOTrainer,
+    role_trainers: Dict[str, PPOTrainer],
     tokenizer: AutoTokenizer,
     env: SocAnalystEnvironment,
     reset_obs: Any,
@@ -139,103 +161,170 @@ def _train_multi_agent_episode(
     negotiation_rounds: int,
 ) -> Tuple[float, Dict[str, Any]]:
     alert_details = reset_obs.alert_details
+    role_last_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
 
-    # Supervisor delegates to log hunter.
-    env.step(
+    def generate_for_role(role: str, prompt: str, max_new_tokens: int = 32) -> Tuple[torch.Tensor, torch.Tensor, str]:
+        trainer = role_trainers[role]
+        return _sample_text(trainer, tokenizer, prompt, device, max_new_tokens=max_new_tokens)
+
+    def ppo_step_for_role(role: str, query_tensors: torch.Tensor, response_tensors: torch.Tensor, reward_value: float) -> None:
+        trainer = role_trainers[role]
+        trainer.step([query_tensors[0]], [response_tensors[0]], [torch.tensor(reward_value, device=device)])
+        role_last_rewards[role] = reward_value
+
+    # Supervisor delegates to log hunter using supervisor-specific policy.
+    sup_delegate_prompt = (
+        "You are SupervisorAgent. Delegate to log_hunter with a short reason.\n"
+        f"Alert={alert_details}\nReturn one delegation sentence."
+    )
+    sup_q1, sup_r1, sup_delegate_text = generate_for_role("supervisor", sup_delegate_prompt, max_new_tokens=20)
+    obs1 = env.step(
         SocAction(
             action_type="delegate_log_hunter",
             agent_role="supervisor",
-            reason="Investigate suspicious login behavior from alert context.",
+            reason=sup_delegate_text.splitlines()[-1][:180] or "Investigate suspicious login behavior.",
             confidence=0.72,
         )
     )
+    ppo_step_for_role("supervisor", sup_q1, sup_r1, float(obs1.reward))
+
     log_query = alert_details.get("ip") or alert_details.get("user") or alert_details.get("id", "A-000")
-    env.step(
+    log_prompt = (
+        "You are LogHunterAgent. Generate a concise search query for logs.\n"
+        f"Alert={alert_details}\nReturn query only."
+    )
+    log_q, log_r, log_text = generate_for_role("log_hunter", log_prompt, max_new_tokens=18)
+    log_generated_query = (log_text.splitlines()[-1].strip() or str(log_query))[:140]
+    obs2 = env.step(
         SocAction(
             action_type="search_logs",
             agent_role="log_hunter",
-            query=str(log_query),
+            query=log_generated_query,
             confidence=0.74,
         )
     )
+    ppo_step_for_role("log_hunter", log_q, log_r, float(obs2.reward))
 
-    # Supervisor delegates to threat intel.
-    env.step(
+    # Supervisor delegates to threat intel with supervisor-specific policy.
+    sup_delegate_ti_prompt = (
+        "You are SupervisorAgent. Delegate to threat_intel with a short reason.\n"
+        f"Alert={alert_details}\nReturn one delegation sentence."
+    )
+    sup_q2, sup_r2, sup_ti_text = generate_for_role("supervisor", sup_delegate_ti_prompt, max_new_tokens=20)
+    obs3 = env.step(
         SocAction(
             action_type="delegate_threat_intel",
             agent_role="supervisor",
-            reason="Enrich IoCs and validate reputation signals.",
+            reason=sup_ti_text.splitlines()[-1][:180] or "Enrich IoCs and validate threat reputation.",
             confidence=0.73,
         )
     )
+    ppo_step_for_role("supervisor", sup_q2, sup_r2, float(obs3.reward))
+
     ti_indicator = alert_details.get("ip") or alert_details.get("hash") or alert_details.get("id", "unknown")
-    env.step(
+    ti_prompt = (
+        "You are ThreatIntelAgent. Produce a compact indicator to enrich.\n"
+        f"Alert={alert_details}\nReturn indicator only."
+    )
+    ti_q, ti_r, ti_text = generate_for_role("threat_intel", ti_prompt, max_new_tokens=16)
+    ti_generated_indicator = (ti_text.splitlines()[-1].strip() or str(ti_indicator))[:120]
+    obs4 = env.step(
         SocAction(
             action_type="get_threat_intel",
             agent_role="threat_intel",
-            indicator=str(ti_indicator),
+            indicator=ti_generated_indicator,
             confidence=0.74,
         )
     )
+    ppo_step_for_role("threat_intel", ti_q, ti_r, float(obs4.reward))
 
     for idx in range(max(0, negotiation_rounds)):
-        env.step(
+        sup_clar_prompt = (
+            "You are SupervisorAgent. Request one clarification from specialists.\n"
+            f"Alert={alert_details}\nReturn one concise clarification request."
+        )
+        sup_qc, sup_rc, sup_clar_text = generate_for_role("supervisor", sup_clar_prompt, max_new_tokens=18)
+        obs_c = env.step(
             SocAction(
                 action_type="request_clarification",
                 agent_role="supervisor",
-                reason=f"Clarification round {idx + 1}: provide confidence-adjusted evidence summary.",
+                reason=sup_clar_text.splitlines()[-1][:180]
+                or f"Clarification round {idx + 1}: provide confidence-adjusted evidence summary.",
                 confidence=0.68,
             )
         )
+        ppo_step_for_role("supervisor", sup_qc, sup_rc, float(obs_c.reward))
+
         if idx % 2 == 0:
-            env.step(
+            lh_report_prompt = (
+                "You are LogHunterAgent. Write a short follow-up report sentence from log review."
+            )
+            lh_qr, lh_rr, lh_report_text = generate_for_role("log_hunter", lh_report_prompt, max_new_tokens=20)
+            obs_lh = env.step(
                 SocAction(
                     action_type="submit_log_report",
                     agent_role="log_hunter",
-                    report="LogHunter follow-up: no benign baseline anomalies detected.",
+                    report=lh_report_text.splitlines()[-1][:220]
+                    or "LogHunter follow-up: no benign baseline anomalies detected.",
                     confidence=0.7,
                 )
             )
+            ppo_step_for_role("log_hunter", lh_qr, lh_rr, float(obs_lh.reward))
         else:
-            env.step(
+            ti_report_prompt = (
+                "You are ThreatIntelAgent. Write a short follow-up enrichment report sentence."
+            )
+            ti_qr, ti_rr, ti_report_text = generate_for_role("threat_intel", ti_report_prompt, max_new_tokens=20)
+            obs_ti = env.step(
                 SocAction(
                     action_type="submit_ti_report",
                     agent_role="threat_intel",
-                    report="ThreatIntel follow-up: indicator overlaps known threat activity.",
+                    report=ti_report_text.splitlines()[-1][:220]
+                    or "ThreatIntel follow-up: indicator overlaps known threat activity.",
                     confidence=0.7,
                 )
             )
+            ppo_step_for_role("threat_intel", ti_qr, ti_rr, float(obs_ti.reward))
 
     # Long-horizon campaign-lite padding: maintain session to max campaign_length turns.
     while env.state.step_count < max(1, campaign_length - 1) and env.state.remaining_steps > 1:
         active = env.state.active_agent
         if active == "supervisor":
-            env.step(
+            sup_pad_prompt = "You are SupervisorAgent. Give one short campaign continuity clarification request."
+            sp_q, sp_r, sp_text = generate_for_role("supervisor", sup_pad_prompt, max_new_tokens=16)
+            obs_sp = env.step(
                 SocAction(
                     action_type="request_clarification",
                     agent_role="supervisor",
-                    reason="Campaign continuity check.",
+                    reason=sp_text.splitlines()[-1][:180] or "Campaign continuity check.",
                     confidence=0.6,
                 )
             )
+            ppo_step_for_role("supervisor", sp_q, sp_r, float(obs_sp.reward))
         elif active == "log_hunter":
-            env.step(
+            lh_pad_prompt = "You are LogHunterAgent. Provide one short campaign memory checkpoint."
+            lp_q, lp_r, lp_text = generate_for_role("log_hunter", lh_pad_prompt, max_new_tokens=16)
+            obs_lp = env.step(
                 SocAction(
                     action_type="submit_log_report",
                     agent_role="log_hunter",
-                    report="Campaign memory checkpoint from logs.",
+                    report=lp_text.splitlines()[-1][:200] or "Campaign memory checkpoint from logs.",
                     confidence=0.6,
                 )
             )
+            ppo_step_for_role("log_hunter", lp_q, lp_r, float(obs_lp.reward))
         else:
-            env.step(
+            ti_pad_prompt = "You are ThreatIntelAgent. Provide one short campaign memory checkpoint."
+            tp_q, tp_r, tp_text = generate_for_role("threat_intel", ti_pad_prompt, max_new_tokens=16)
+            obs_tp = env.step(
                 SocAction(
                     action_type="submit_ti_report",
                     agent_role="threat_intel",
-                    report="Campaign memory checkpoint from threat intel.",
+                    report=tp_text.splitlines()[-1][:200] or "Campaign memory checkpoint from threat intel.",
                     confidence=0.6,
                 )
             )
+            ppo_step_for_role("threat_intel", tp_q, tp_r, float(obs_tp.reward))
 
     final_prompt = (
         "You are SupervisorAgent. Decide final SOC action from this multi-agent transcript.\n"
@@ -245,7 +334,7 @@ def _train_multi_agent_episode(
         "Return one of: false_positive, escalate_tier2, block_if_malicious."
     )
     query_tensors, response_tensors, decision_text = _sample_text(
-        trainer, tokenizer, final_prompt, device, max_new_tokens=20
+        role_trainers["supervisor"], tokenizer, final_prompt, device, max_new_tokens=20
     )
     decision = _parse_decision(decision_text, default="escalate_tier2")
     final_obs = env.step(
@@ -259,8 +348,12 @@ def _train_multi_agent_episode(
     )
 
     reward_value = float(final_obs.reward)
-    trainer.step([query_tensors[0]], [response_tensors[0]], [torch.tensor(reward_value, device=device)])
+    role_trainers["supervisor"].step(
+        [query_tensors[0]], [response_tensors[0]], [torch.tensor(reward_value, device=device)]
+    )
+    role_last_rewards["supervisor"] = reward_value
     metrics = final_obs.episode_metrics.model_dump() if final_obs.episode_metrics else {}
+    metrics["per_role_last_rewards"] = role_last_rewards
     return reward_value, metrics
 
 
@@ -292,8 +385,11 @@ def run_training_loop(
     TRAINING_STATUS.last_message = "Training initialized"
     TRAINING_STATUS.model_name = resolved_model_name
     TRAINING_STATUS.mode = training_mode
+    TRAINING_STATUS.policy_mode = "multi_policy_by_role" if training_mode in ("multi_agent", "campaign") else "single_policy"
     TRAINING_STATUS.run_seed = seed
     TRAINING_STATUS.per_agent_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
+    TRAINING_STATUS.role_model_names = {"supervisor": resolved_model_name, "log_hunter": resolved_model_name, "threat_intel": resolved_model_name}
+    TRAINING_STATUS.per_role_last_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
     TRAINING_STATUS.coordination_efficiency = 0.0
     TRAINING_STATUS.evidence_sufficiency = 0.0
     TRAINING_STATUS.recovery_after_mistake = 0.0
@@ -306,12 +402,19 @@ def run_training_loop(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    policy_model = AutoModelForCausalLMWithValueHead.from_pretrained(resolved_model_name)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    policy_model = AutoModelForCausalLMWithValueHead.from_pretrained(resolved_model_name)
     policy_model.to(device)
-
     ppo_config = PPOConfig(batch_size=1, mini_batch_size=1, learning_rate=resolved_learning_rate)
     trainer = PPOTrainer(config=ppo_config, model=policy_model, tokenizer=tokenizer)
+    role_trainers: Optional[Dict[str, PPOTrainer]] = None
+    if training_mode in ("multi_agent", "campaign"):
+        role_trainers = _init_role_trainers(
+            model_name=resolved_model_name,
+            learning_rate=resolved_learning_rate,
+            tokenizer=tokenizer,
+            device=device,
+        )
 
     difficulties = ["easy", "medium", "hard"]
 
@@ -337,7 +440,11 @@ def run_training_loop(
                 # campaign mode currently reuses multi-agent mechanics with extended campaign horizon.
                 effective_campaign_length = campaign_length if training_mode == "campaign" else max(8, campaign_length // 2)
                 reward_value, episode_metrics = _train_multi_agent_episode(
-                    trainer=trainer,
+                    role_trainers=role_trainers or {
+                        "supervisor": trainer,
+                        "log_hunter": trainer,
+                        "threat_intel": trainer,
+                    },
                     tokenizer=tokenizer,
                     env=env,
                     reset_obs=reset_obs,
@@ -349,6 +456,8 @@ def run_training_loop(
             TRAINING_STATUS.completed_episodes = ep + 1
             TRAINING_STATUS.last_reward = reward_value
             TRAINING_STATUS.last_message = f"Episode {ep + 1}/{episodes} complete in {training_mode} mode."
+            if "per_role_last_rewards" in episode_metrics:
+                TRAINING_STATUS.per_role_last_rewards = episode_metrics["per_role_last_rewards"]
 
             metrics_per_agent = episode_metrics.get("per_agent_rewards", {})
             for agent in aggregate_per_agent:
@@ -373,6 +482,7 @@ def run_training_loop(
                     "memory_consistency_score": float(episode_metrics.get("memory_consistency_score", 0.0)),
                     "campaign_progress": float(episode_metrics.get("campaign_progress", 0.0)),
                     "per_agent_rewards": metrics_per_agent,
+                    "per_role_last_rewards": episode_metrics.get("per_role_last_rewards", {}),
                     "seed": seed,
                     "random_probe": round(rng.random(), 4),
                 }
@@ -391,6 +501,12 @@ def run_training_loop(
 
         trainer.model.save_pretrained(str(output_dir))
         tokenizer.save_pretrained(str(output_dir))
+        if role_trainers is not None:
+            role_dir = output_dir / "role_policies"
+            role_dir.mkdir(parents=True, exist_ok=True)
+            for role, role_trainer in role_trainers.items():
+                role_path = role_dir / role
+                role_trainer.model.save_pretrained(str(role_path))
         report = {
             "mode": training_mode,
             "model_name": resolved_model_name,
@@ -406,6 +522,9 @@ def run_training_loop(
             "campaign_progress": TRAINING_STATUS.campaign_progress,
             "delayed_reward_success_rate": TRAINING_STATUS.delayed_reward_success_rate,
             "per_agent_rewards": TRAINING_STATUS.per_agent_rewards,
+            "policy_mode": TRAINING_STATUS.policy_mode,
+            "role_model_names": TRAINING_STATUS.role_model_names,
+            "per_role_last_rewards": TRAINING_STATUS.per_role_last_rewards,
             "history": TRAINING_STATUS.training_history,
         }
         report_path = output_dir / "training_report.json"
