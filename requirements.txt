@@ -3,3 +3,11 @@ pydantic>=2.0.0
 fastapi
 uvicorn
 openai
+trl>=0.8.0,<1.0.0
+torch>=2.0.0
+transformers>=4.38.0,<5.0.0
+peft>=0.7.0
+splunk-sdk>=1.7.0
+paramiko>=3.0.0
+mcp>=0.1.0
+huggingface_hub>=0.23.0

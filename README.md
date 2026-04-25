@@ -43,3 +43,53 @@ The agent can query internal tools using the following actions:
    ```bash
    python inference.py
    ```
+
+## Hugging Face Space Deployment
+
+This repository is already configured as a Docker Space (`sdk: docker` in the README frontmatter).
+
+### 1) Push this repo to a Hugging Face Space
+- Create a new Space on Hugging Face.
+- Choose **Docker** SDK.
+- Push this project files to that Space repository.
+
+### 2) Configure Space secrets
+Set these in **Space Settings -> Variables and secrets**:
+- `HF_TOKEN` (required if you want to push trained checkpoints to Hub)
+- `HF_REPO_ID` (example: `username/soc-ppo-agent`)
+- `HF_MODEL_NAME` (optional, default: `distilgpt2`)
+- `TRAIN_LR` (optional, default: `1e-5`)
+- `TRAIN_OUTPUT_DIR` (optional, default: `./artifacts/ppo-soc-model`)
+- `SPLUNK_HOST`, `SPLUNK_PORT`, `SPLUNK_USERNAME`, `SPLUNK_PASSWORD`, `SPLUNK_SCHEME` (optional, if using live Splunk)
+
+### 3) Training API payload for TRL PPO
+Call:
+- `POST /api/train`
+With JSON:
+```json
+{
+  "episodes": 10,
+  "model_name": "distilgpt2",
+  "learning_rate": 1e-5,
+  "push_to_hub": true,
+  "mode": "multi_agent",
+  "campaign_length": 20,
+  "negotiation_rounds": 2,
+  "seed": 42
+}
+```
+
+Check progress:
+- `GET /api/train/status`
+- `GET /api/eval/report`
+
+Milestone-3 campaign metrics exposed in status/report:
+- `recovery_after_mistake`
+- `memory_consistency_score`
+- `campaign_progress`
+- `delayed_reward_success_rate`
+
+### 4) Notes for HF compute credits
+- Prefer **GPU Space hardware** for PPO training.
+- Start with low episode count (5-20) to validate flow.
+- Once stable, increase episodes and switch to larger models.

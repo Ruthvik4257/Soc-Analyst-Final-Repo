@@ -3,263 +3,356 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SOC Analyst Environment Demo</title>
+    <title>OpenEnv SOC Analyst</title>
     <style>
         :root {
-            --bg: #0d1117;
-            --panel: #161b22;
-            --border: #30363d;
-            --text: #c9d1d9;
-            --primary: #58a6ff;
-            --success: #2ea043;
-            --danger: #f85149;
-            --warning: #d29922;
-            --muted: #8b949e;
+            --bg: #09090b;
+            --panel: rgba(255, 255, 255, 0.06);
+            --border: rgba(255, 255, 255, 0.14);
+            --text: #f4f4f5;
+            --muted: #a1a1aa;
+            --primary: #3b82f6;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --warning: #f59e0b;
         }
 
-        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+        * {
+            box-sizing: border-box;
+            font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
 
         body {
-            background-color: var(--bg);
-            color: var(--text);
             margin: 0;
-            padding: 0;
-            display: flex;
-            height: 100vh;
-            overflow: hidden;
+            background: radial-gradient(circle at top right, #18181b 0%, var(--bg) 45%);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 22px;
         }
 
-        /* Sidebar */
-        #sidebar {
-            width: 320px;
+        .app {
+            max-width: 1280px;
+            margin: 0 auto;
+        }
+
+        .glass {
             background: var(--panel);
-            border-right: 1px solid var(--border);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+
+        .topbar {
             display: flex;
-            flex-direction: column;
-            padding: 20px;
-            gap: 20px;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 18px;
+            margin-bottom: 16px;
+        }
+
+        .title {
+            margin: 0;
+            font-size: 18px;
+            letter-spacing: 0.2px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+        }
+
+        .tab {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text);
+            background: transparent;
+            padding: 8px 14px;
+            cursor: pointer;
+        }
+
+        .tab.active {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.45);
+        }
+
+        .view {
+            display: none;
+        }
+
+        .view.active {
+            display: block;
+        }
+
+        .terminal-layout {
+            display: grid;
+            grid-template-columns: 310px 1fr;
+            gap: 16px;
+        }
+
+        .side-panel, .main-panel {
+            padding: 16px;
         }
 
         .section {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
+            margin-bottom: 16px;
         }
 
-        .section-title {
+        .section h3 {
+            margin: 0 0 10px 0;
             font-size: 12px;
             text-transform: uppercase;
+            letter-spacing: 0.8px;
             color: var(--muted);
-            font-weight: bold;
-            letter-spacing: 0.5px;
         }
 
-        select, button, input {
-            background: var(--bg);
+        .panel-box {
             border: 1px solid var(--border);
-            color: var(--text);
-            padding: 10px;
-            border-radius: 6px;
-            font-size: 14px;
+            border-radius: 10px;
+            background: rgba(9, 9, 11, 0.35);
+            padding: 12px;
         }
 
-        select:focus, input:focus {
-            outline: none;
-            border-color: var(--primary);
+        input, select, button {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: rgba(9, 9, 11, 0.7);
+            color: var(--text);
+            padding: 10px 12px;
         }
 
         button {
             cursor: pointer;
-            transition: all 0.2s;
-            font-weight: 500;
+            transition: 0.2s ease;
         }
-
-        button:hover { background: #1f2428; }
 
         .btn-primary {
             background: var(--primary);
-            color: #000;
-            border: none;
-        }
-        .btn-primary:hover { background: #3182ce; }
-
-        .btn-success { background: var(--success); color: white; border: none; }
-        .btn-success:hover { background: #238636; }
-
-        .btn-danger { background: var(--danger); color: white; border: none; }
-        .btn-danger:hover { background: #da3633; }
-
-        .info-card {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 15px;
-            font-size: 13px;
+            border-color: transparent;
         }
 
-        /* Main Workspace */
-        #workspace {
-            flex: 1;
+        .btn-success { background: var(--success); border-color: transparent; }
+        .btn-danger { background: var(--danger); border-color: transparent; }
+        .btn-warning { background: var(--warning); border-color: transparent; color: #111; }
+
+        .row {
             display: flex;
-            flex-direction: column;
+            gap: 8px;
         }
 
-        #header {
-            padding: 20px;
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        #logs {
-            flex: 1;
-            padding: 20px;
+        .log-viewer {
+            height: 430px;
             overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px;
+            background: rgba(2, 6, 23, 0.55);
         }
 
         .log-entry {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-left: 4px solid var(--muted);
-            padding: 15px;
-            border-radius: 6px;
+            border-left: 3px solid var(--muted);
+            margin-bottom: 10px;
+            padding: 8px 10px;
+            background: rgba(255, 255, 255, 0.03);
         }
 
-        .log-entry.agent { border-left-color: var(--primary); }
-        .log-entry.system { border-left-color: var(--warning); }
-        .log-entry.reward { border-left-color: var(--success); }
+        .log-entry.system { border-color: var(--warning); }
+        .log-entry.agent { border-color: var(--primary); }
+        .log-entry.reward { border-color: var(--success); }
 
         .log-title {
-            font-weight: bold;
-            margin-bottom: 5px;
-            font-size: 13px;
+            color: var(--muted);
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        pre {
+            white-space: pre-wrap;
+            margin: 0;
+            font-family: Consolas, monospace;
+            font-size: 12px;
+        }
+
+        .muted {
             color: var(--muted);
         }
 
-        /* Controls */
-        #controls {
-            padding: 20px;
-            background: var(--panel);
-            border-top: 1px solid var(--border);
+        .status-row {
+            margin-bottom: 10px;
             display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        .action-row {
-            display: flex;
-            gap: 10px;
-        }
-
-        .action-row .btn-group {
-            display: flex;
-            gap: 5px;
-        }
-        
-        pre {
-            margin: 0;
-            white-space: pre-wrap;
-            font-family: monospace;
-            font-size: 13px;
-        }
-
-        .evidence-tag {
-            display: inline-block;
-            background: #238636;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            margin-right: 5px;
-            margin-bottom: 5px;
-        }
-        
-        .score-badge {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            padding: 5px 10px;
-            border-radius: 20px;
-            font-weight: bold;
-            color: var(--primary);
+            justify-content: space-between;
+            gap: 8px;
         }
     </style>
 </head>
 <body>
-
-    <!-- Sidebar -->
-    <div id="sidebar">
-        <div class="section">
-            <div class="section-title">Scenario Control</div>
-            <select id="difficulty">
-                <option value="easy">Easy (Brute Force)</option>
-                <option value="medium">Medium (Emotet Malware)</option>
-                <option value="hard">Hard (Impossible Travel)</option>
-            </select>
-            <button class="btn-primary" onclick="resetEnvironment()">Start Triage</button>
-        </div>
-
-        <div class="section">
-            <div class="section-title">Alert Details</div>
-            <div class="info-card" id="alert-details">
-                <em>No active alert. Start triage to receive one.</em>
+    <div class="app">
+        <div class="topbar glass">
+            <h1 class="title">SOC Analyst Environment</h1>
+            <div class="tabs">
+                <button class="tab active" data-view="terminal" onclick="switchView('terminal')">Terminal</button>
+                <button class="tab" data-view="integrations" onclick="switchView('integrations')">Integrations</button>
+                <button class="tab" data-view="training" onclick="switchView('training')">Training</button>
             </div>
         </div>
 
-        <div class="section">
-            <div class="section-title">Evidence Collected</div>
-            <div class="info-card" id="evidence-panel">
-                <em>None</em>
-            </div>
-        </div>
-    </div>
-
-    <!-- Main Workspace -->
-    <div id="workspace">
-        <div id="header">
-            <h2 style="margin:0;">SOC Analyst Terminal</h2>
-            <div class="score-badge">Steps Left: <span id="steps-left">-</span> | Score: <span id="score">0.0</span></div>
-        </div>
-
-        <div id="logs">
-            <div class="log-entry system">
-                <div class="log-title">SYSTEM INIT</div>
-                <div>Welcome to the SOC Analyst Environment. Select a difficulty and click "Start Triage".</div>
-            </div>
-        </div>
-
-        <!-- Action Controls -->
-        <div id="controls" style="opacity: 0.5; pointer-events: none;">
-            <div class="action-row">
-                <div class="btn-group">
-                    <button onclick="setActionMode('search_logs')">Search Logs</button>
-                    <button onclick="setActionMode('get_threat_intel')">Threat Intel</button>
-                    <button onclick="setActionMode('get_asset_info')">Asset Info</button>
+        <div id="terminal" class="view active">
+            <div class="terminal-layout">
+                <div class="side-panel glass">
+                    <div class="section">
+                        <h3>Scenario Control</h3>
+                        <select id="run-mode">
+                            <option value="single_agent">Single Agent</option>
+                            <option value="multi_agent">Multi Agent</option>
+                            <option value="campaign">Campaign (Lite)</option>
+                        </select>
+                        <div style="height:8px"></div>
+                        <select id="difficulty">
+                            <option value="easy">Easy (Brute Force)</option>
+                            <option value="medium">Medium (Emotet Malware)</option>
+                            <option value="hard">Hard (Impossible Travel)</option>
+                        </select>
+                        <div style="height:8px"></div>
+                        <button class="btn-primary" onclick="resetEnvironment()">Start Triage</button>
+                    </div>
+                    <div class="section">
+                        <h3>Alert Details</h3>
+                        <div class="panel-box" id="alert-details"><em class="muted">No active alert.</em></div>
+                    </div>
+                    <div class="section">
+                        <h3>Evidence Collected</h3>
+                        <div class="panel-box" id="evidence-panel"><em class="muted">None</em></div>
+                    </div>
+                    <div class="section">
+                        <h3>Active Agent</h3>
+                        <div class="panel-box" id="active-agent"><em class="muted">single-agent flow</em></div>
+                    </div>
+                </div>
+                <div class="main-panel glass">
+                    <div class="status-row">
+                        <div>Steps Left: <span id="steps-left">-</span></div>
+                        <div>Score: <span id="score">0.00</span></div>
+                    </div>
+                    <div id="logs" class="log-viewer">
+                        <div class="log-entry system">
+                            <div class="log-title">SYSTEM INIT</div>
+                            <pre>Welcome to SOC Analyst Terminal. Start triage to receive an alert.</pre>
+                        </div>
+                    </div>
+                    <div style="height:8px"></div>
+                    <div class="panel-box">
+                        <div><strong>Multi-Agent Transcript</strong></div>
+                        <div id="transcript-view" class="muted" style="max-height:110px; overflow-y:auto; margin-top:6px;">
+                            No transcript yet.
+                        </div>
+                        <div style="height:8px"></div>
+                        <div id="metrics-view" class="muted">No metrics yet.</div>
+                    </div>
+                    <div style="height:12px"></div>
+                    <div class="row">
+                        <button onclick="setActionMode('search_logs')">Search Logs</button>
+                        <button onclick="setActionMode('get_threat_intel')">Threat Intel</button>
+                        <button onclick="setActionMode('get_asset_info')">Asset Info</button>
+                    </div>
+                    <div class="row" style="margin-top:8px;">
+                        <select id="agent-role">
+                            <option value="supervisor">Supervisor</option>
+                            <option value="log_hunter">LogHunter</option>
+                            <option value="threat_intel">ThreatIntel</option>
+                        </select>
+                        <input id="action-confidence" type="number" min="0" max="1" step="0.05" value="0.7" placeholder="Confidence">
+                    </div>
+                    <div class="row" style="margin-top:8px;" id="query-input-row">
+                        <input id="action-input" type="text" placeholder="Enter value...">
+                        <button class="btn-primary" onclick="submitQueryAction()">Execute</button>
+                    </div>
+                    <div style="height:8px"></div>
+                    <div class="row">
+                        <button class="btn-success" onclick="takeAction('false_positive')">False Positive</button>
+                        <button class="btn-warning" onclick="takeAction('escalate_tier2')">Escalate Tier 2</button>
+                        <button class="btn-danger" onclick="takeAction('block_if_malicious')">Block Malicious</button>
+                    </div>
                 </div>
             </div>
-            
-            <div class="action-row" id="query-input-row" style="display:none;">
-                <input type="text" id="action-input" placeholder="Enter IP, hash, or hostname..." style="flex:1;">
-                <button class="btn-primary" onclick="submitQueryAction()">Execute Query</button>
-            </div>
+        </div>
 
-            <div class="section-title" style="margin-top:10px;">Final Resolution (Ends Episode)</div>
-            <div class="action-row">
-                <button class="btn-success" onclick="takeAction('false_positive')">False Positive</button>
-                <button class="btn-warning" onclick="takeAction('escalate_tier2')">Escalate to Tier 2</button>
-                <button class="btn-danger" onclick="takeAction('block_if_malicious')">Block Malicious</button>
+        <div id="integrations" class="view glass" style="padding:16px;">
+            <h2 style="margin-top:0;">Splunk Integrations</h2>
+            <p class="muted">Submit credentials to initialize the backend Splunk client.</p>
+            <div class="row">
+                <input id="splunk-host" placeholder="Host">
+                <input id="splunk-port" placeholder="Port (e.g. 8089)" value="8089">
+            </div>
+            <div class="row" style="margin-top:8px;">
+                <input id="splunk-username" placeholder="Username">
+                <input id="splunk-password" placeholder="Password" type="password">
+            </div>
+            <div class="row" style="margin-top:8px;">
+                <select id="splunk-scheme">
+                    <option value="https">https</option>
+                    <option value="http">http</option>
+                </select>
+                <button class="btn-primary" onclick="saveSplunkIntegration()">Connect Splunk</button>
+            </div>
+            <p id="integration-status" class="muted"></p>
+        </div>
+
+        <div id="training" class="view glass" style="padding:16px;">
+            <h2 style="margin-top:0;">Training Dashboard</h2>
+            <p class="muted">Trigger PPO training and watch telemetry updates.</p>
+            <div class="row">
+                <input id="episodes" type="number" min="1" value="10" placeholder="Episodes">
+                <input id="model-name" type="text" value="distilgpt2" placeholder="Model name">
+            </div>
+            <div class="row" style="margin-top:8px;">
+                <select id="training-mode">
+                    <option value="single_agent">single_agent</option>
+                    <option value="multi_agent">multi_agent</option>
+                    <option value="campaign">campaign</option>
+                </select>
+                <input id="training-seed" type="number" value="42" placeholder="seed">
+            </div>
+            <div class="row" style="margin-top:8px;">
+                <input id="learning-rate" type="number" step="0.000001" value="0.00001" placeholder="Learning rate">
+                <input id="campaign-length" type="number" min="5" value="20" placeholder="campaign length">
+                <input id="negotiation-rounds" type="number" min="0" value="2" placeholder="negotiation rounds">
+                <label style="display:flex; align-items:center; gap:8px; padding: 0 8px; border:1px solid var(--border); border-radius:10px;">
+                    <input id="push-to-hub" type="checkbox" style="width:auto;">
+                    Push to Hub
+                </label>
+                <button class="btn-primary" onclick="startTraining()">Start Training</button>
+            </div>
+            <div style="height:12px"></div>
+            <div class="panel-box">
+                <div>Running: <span id="train-running">false</span></div>
+                <div>Progress: <span id="train-progress">0/0</span></div>
+                <div>Last Reward: <span id="train-reward">0.0</span></div>
+                <div>Model: <span id="train-model">-</span></div>
+                <div>Mode: <span id="train-mode">-</span> | Seed: <span id="train-seed">-</span></div>
+                <div>Coordination: <span id="train-coordination">0.00</span> | Evidence: <span id="train-evidence">0.00</span></div>
+                <div>Recovery: <span id="train-recovery">0.00</span> | Memory: <span id="train-memory">0.00</span></div>
+                <div>Campaign Progress: <span id="train-campaign-progress">0.00</span> | Delayed Reward: <span id="train-delayed">0.00</span></div>
+                <div>Per-Agent: <span id="train-agents" class="muted">supervisor=0, log_hunter=0, threat_intel=0</span></div>
+                <div>Message: <span id="train-message" class="muted">Idle</span></div>
             </div>
         </div>
     </div>
 
     <script>
-        let currentActionMode = "";
+        let currentActionMode = "search_logs";
         let currentEpisodeId = "";
+        let trainingPoller = null;
+        let currentRunMode = "single_agent";
 
-        function addLog(title, message, type="system") {
+        function switchView(viewName) {
+            document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+            document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+            document.getElementById(viewName).classList.add("active");
+            document.querySelector(`.tab[data-view="${viewName}"]`).classList.add("active");
+        }
+
+        function addLog(title, message, type = "system") {
             const logs = document.getElementById("logs");
             const entry = document.createElement("div");
             entry.className = `log-entry ${type}`;
@@ -269,76 +362,80 @@
         }
 
         function updateStateWindow(obs) {
-            if(obs.alert_details) {
+            if (obs.alert_details) {
                 document.getElementById("alert-details").innerHTML = `<pre>${JSON.stringify(obs.alert_details, null, 2)}</pre>`;
             }
-            
-            if(obs.evidence_collected) {
-                const evidenceHtml = obs.evidence_collected.length > 0 
-                    ? obs.evidence_collected.map(e => `<span class="evidence-tag">${e}</span>`).join('')
-                    : "<em>None</em>";
+            if (obs.evidence_collected) {
+                const evidenceHtml = obs.evidence_collected.length > 0
+                    ? obs.evidence_collected.join(", ")
+                    : "<em class='muted'>None</em>";
                 document.getElementById("evidence-panel").innerHTML = evidenceHtml;
             }
-
             document.getElementById("steps-left").innerText = obs.remaining_steps;
             const score = Number(obs.score ?? 0);
             document.getElementById("score").innerText = Number.isFinite(score) ? score.toFixed(2) : "0.00";
+            document.getElementById("active-agent").innerText = obs.active_agent || "single-agent flow";
 
-            if (obs.done) {
-                document.getElementById("controls").style.opacity = "0.5";
-                document.getElementById("controls").style.pointerEvents = "none";
+            const transcriptLines = (obs.transcript || []).slice(-5).map(t =>
+                `[${t.sender} -> ${t.recipient}] ${t.message_type}: ${t.payload} (c=${Number(t.confidence || 0).toFixed(2)})`
+            );
+            document.getElementById("transcript-view").innerHTML = transcriptLines.length
+                ? `<pre>${transcriptLines.join("\n")}</pre>`
+                : "No transcript yet.";
+
+            if (obs.episode_metrics) {
+                const m = obs.episode_metrics;
+                document.getElementById("metrics-view").innerText =
+                    `coordination=${Number(m.coordination_efficiency || 0).toFixed(2)}, evidence=${Number(m.evidence_sufficiency || 0).toFixed(2)}, campaign=${Number(m.campaign_progress || 0).toFixed(2)}, recovery=${Number(m.recovery_after_mistake || 0).toFixed(2)}, memory=${Number(m.memory_consistency_score || 0).toFixed(2)}`;
+            } else {
+                document.getElementById("metrics-view").innerText = "No metrics yet.";
             }
         }
 
         async function resetEnvironment() {
             const difficulty = document.getElementById("difficulty").value;
-            document.getElementById("logs").innerHTML = "";
-            addLog("SYSTEM", `Initializing new ${difficulty} alert...`);
-
-            try {
-                const response = await fetch("/reset", {
-                    method: "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({
-                        difficulty: difficulty
-                    })
-                });
-                
-                const data = await response.json();
-                const obs = data.observation;
-                currentEpisodeId = data.episode_id || data.state?.episode_id || "";
-                
-                addLog("ENVIRONMENT", obs.message, "system");
-                updateStateWindow(obs);
-                
-                document.getElementById("controls").style.opacity = "1";
-                document.getElementById("controls").style.pointerEvents = "auto";
-                document.getElementById("query-input-row").style.display = "none";
-
-            } catch (err) {
-                addLog("ERROR", err.toString(), "danger");
-            }
+            currentRunMode = document.getElementById("run-mode").value;
+            addLog("SYSTEM", `Initializing ${difficulty} scenario...`, "system");
+            const endpoint = currentRunMode === "single_agent" ? "/reset" : "/api/multi/reset";
+            const body = currentRunMode === "single_agent"
+                ? {difficulty}
+                : {difficulty, mode: currentRunMode};
+            const response = await fetch(endpoint, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(body)
+            });
+            const data = await response.json();
+            const obs = data.observation;
+            currentEpisodeId = data.episode_id || data.state?.episode_id || "";
+            addLog("ENVIRONMENT", `${obs.message}\n[mode=${currentRunMode}]`, "system");
+            updateStateWindow(obs);
         }
 
         function setActionMode(mode) {
             currentActionMode = mode;
-            document.getElementById("query-input-row").style.display = "flex";
             const input = document.getElementById("action-input");
-            if (mode === "search_logs") input.placeholder = "Enter IP or Username for logs...";
-            if (mode === "get_threat_intel") input.placeholder = "Enter IP or Hash for reputation...";
-            if (mode === "get_asset_info") input.placeholder = "Enter Hostname or Username...";
+            if (mode === "search_logs") input.placeholder = "IP or username for logs";
+            if (mode === "get_threat_intel") input.placeholder = "IP or hash for intel";
+            if (mode === "get_asset_info") input.placeholder = "Hostname or user for asset info";
             input.focus();
         }
 
         async function submitQueryAction() {
-            const val = document.getElementById("action-input").value;
-            if(!val) return;
-
-            let actionObj = { action_type: currentActionMode };
+            const val = document.getElementById("action-input").value.trim();
+            if (!val) return;
+            const actionObj = {action_type: currentActionMode};
+            actionObj.agent_role = document.getElementById("agent-role").value;
+            actionObj.confidence = Number(document.getElementById("action-confidence").value || 0.7);
+            if (currentRunMode !== "single_agent" && actionObj.agent_role === "supervisor") {
+                if (currentActionMode === "search_logs") actionObj.action_type = "delegate_log_hunter";
+                if (currentActionMode === "get_threat_intel") actionObj.action_type = "delegate_threat_intel";
+                if (currentActionMode === "get_asset_info") actionObj.action_type = "request_clarification";
+                actionObj.reason = val;
+            }
             if (currentActionMode === "search_logs") actionObj.query = val;
             if (currentActionMode === "get_threat_intel") actionObj.indicator = val;
             if (currentActionMode === "get_asset_info") actionObj.hostname_or_user = val;
-
             await sendStep(actionObj);
             document.getElementById("action-input").value = "";
         }
@@ -346,41 +443,113 @@
         async function takeAction(decision) {
             const actionObj = {
                 action_type: "take_action",
-                decision: decision,
-                reason: "Manual triage via UI"
+                decision,
+                reason: "Manual triage via Terminal view",
+                agent_role: document.getElementById("agent-role").value,
+                confidence: Number(document.getElementById("action-confidence").value || 0.7)
             };
+            if (currentRunMode !== "single_agent" && actionObj.agent_role !== "supervisor") {
+                actionObj.action_type = actionObj.agent_role === "log_hunter" ? "submit_log_report" : "submit_ti_report";
+                actionObj.report = `Proposed decision=${decision}`;
+            }
             await sendStep(actionObj);
         }
 
         async function sendStep(actionObj) {
             addLog("AGENT ACTION", JSON.stringify(actionObj, null, 2), "agent");
+            const endpoint = currentRunMode === "single_agent" ? "/step" : "/api/multi/step";
+            const payload = currentRunMode === "single_agent"
+                ? {action: actionObj, ...(currentEpisodeId ? {episode_id: currentEpisodeId} : {})}
+                : {episode_id: currentEpisodeId, action: actionObj};
+            const response = await fetch(endpoint, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            const obs = data.observation;
+            const reward = Number(data.reward || 0);
+            addLog("ENVIRONMENT", `${obs.message}\n[Reward: ${reward >= 0 ? "+" : ""}${reward}]`, reward > 0 ? "reward" : "system");
+            updateStateWindow(obs);
 
-            try {
-                const response = await fetch("/step", {
-                    method: "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({
-                        action: actionObj,
-                        ...(currentEpisodeId ? { episode_id: currentEpisodeId } : {})
-                    })
-                });
-                
-                const data = await response.json();
-                const obs = data.observation;
-                
-                let logType = "system";
-                if(data.reward > 0) logType = "reward";
-                if(obs.done) logType = (data.reward > 0) ? "reward" : "system";
+            if (currentRunMode !== "single_agent" && currentEpisodeId) {
+                const metricsResponse = await fetch(`/api/eval/metrics?episode_id=${encodeURIComponent(currentEpisodeId)}`);
+                const metricsData = await metricsResponse.json();
+                if (metricsData.ok && metricsData.metrics) {
+                    const m = metricsData.metrics;
+                    document.getElementById("metrics-view").innerText =
+                        `coordination=${Number(m.coordination_efficiency || 0).toFixed(2)}, evidence=${Number(m.evidence_sufficiency || 0).toFixed(2)}, invalid=${m.invalid_actions || 0}, negotiation=${m.negotiation_rounds || 0}`;
+                }
+            }
+        }
 
-                const reward = Number(data.reward);
-                const rewardText = Number.isFinite(reward)
-                    ? `\n[Reward: ${reward >= 0 ? "+" : ""}${reward}]`
-                    : "";
-                addLog("ENVIRONMENT", obs.message + rewardText, logType);
-                updateStateWindow(obs);
+        async function saveSplunkIntegration() {
+            const payload = {
+                host: document.getElementById("splunk-host").value,
+                port: Number(document.getElementById("splunk-port").value || 8089),
+                username: document.getElementById("splunk-username").value,
+                password: document.getElementById("splunk-password").value,
+                scheme: document.getElementById("splunk-scheme").value
+            };
+            const response = await fetch("/api/integrations/splunk", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            document.getElementById("integration-status").innerText = data.message || "Splunk configuration submitted.";
+        }
 
-            } catch (err) {
-                addLog("ERROR", err.toString(), "danger");
+        async function startTraining() {
+            const episodes = Number(document.getElementById("episodes").value || 10);
+            const model_name = document.getElementById("model-name").value.trim() || "distilgpt2";
+            const learning_rate = Number(document.getElementById("learning-rate").value || 0.00001);
+            const mode = document.getElementById("training-mode").value;
+            const seed = Number(document.getElementById("training-seed").value || 42);
+            const campaign_length = Number(document.getElementById("campaign-length").value || 20);
+            const negotiation_rounds = Number(document.getElementById("negotiation-rounds").value || 2);
+            const push_to_hub = document.getElementById("push-to-hub").checked;
+            await fetch("/api/train", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    episodes,
+                    model_name,
+                    learning_rate,
+                    push_to_hub,
+                    mode,
+                    seed,
+                    campaign_length,
+                    negotiation_rounds
+                })
+            });
+            if (trainingPoller) clearInterval(trainingPoller);
+            trainingPoller = setInterval(pollTrainingStatus, 1500);
+            await pollTrainingStatus();
+        }
+
+        async function pollTrainingStatus() {
+            const response = await fetch("/api/train/status");
+            const status = await response.json();
+            document.getElementById("train-running").innerText = String(status.running);
+            document.getElementById("train-progress").innerText = `${status.completed_episodes}/${status.total_episodes}`;
+            document.getElementById("train-reward").innerText = String(status.last_reward);
+            document.getElementById("train-model").innerText = status.model_name || "-";
+            document.getElementById("train-mode").innerText = status.mode || "-";
+            document.getElementById("train-seed").innerText = String(status.run_seed ?? "-");
+            document.getElementById("train-coordination").innerText = Number(status.coordination_efficiency || 0).toFixed(2);
+            document.getElementById("train-evidence").innerText = Number(status.evidence_sufficiency || 0).toFixed(2);
+            document.getElementById("train-recovery").innerText = Number(status.recovery_after_mistake || 0).toFixed(2);
+            document.getElementById("train-memory").innerText = Number(status.memory_consistency_score || 0).toFixed(2);
+            document.getElementById("train-campaign-progress").innerText = Number(status.campaign_progress || 0).toFixed(2);
+            document.getElementById("train-delayed").innerText = Number(status.delayed_reward_success_rate || 0).toFixed(2);
+            const p = status.per_agent_rewards || {};
+            document.getElementById("train-agents").innerText =
+                `supervisor=${Number(p.supervisor || 0).toFixed(2)}, log_hunter=${Number(p.log_hunter || 0).toFixed(2)}, threat_intel=${Number(p.threat_intel || 0).toFixed(2)}`;
+            document.getElementById("train-message").innerText = status.last_message || "Idle";
+            if (!status.running && trainingPoller) {
+                clearInterval(trainingPoller);
+                trainingPoller = null;
             }
         }
     </script>
