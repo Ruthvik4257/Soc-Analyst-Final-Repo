@@ -341,6 +341,11 @@
                 </label>
                 <button class="btn-primary" onclick="startTraining()">Start Training</button>
             </div>
+            <div class="row" style="margin-top:8px;">
+                <button onclick="applyTrainingPreset('run1_smoke')">Apply Run 1 (Smoke)</button>
+                <button onclick="applyTrainingPreset('run2_multi_agent')">Apply Run 2 (Multi-Agent)</button>
+                <button onclick="applyTrainingPreset('run3_campaign')">Apply Run 3 (Campaign)</button>
+            </div>
             <div style="height:12px"></div>
             <div class="panel-box">
                 <div>Running: <span id="train-running">false</span></div>
@@ -362,6 +367,7 @@
         let currentEpisodeId = "";
         let trainingPoller = null;
         let currentRunMode = "single_agent";
+        let cachedTrainingPresets = {};
 
         function switchView(viewName) {
             document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
@@ -594,6 +600,27 @@
             await pollTrainingStatus();
         }
 
+        async function loadTrainingPresets() {
+            const response = await fetch("/api/train/presets");
+            const data = await response.json();
+            if (data.ok && data.presets) {
+                cachedTrainingPresets = data.presets;
+            }
+        }
+
+        function applyTrainingPreset(presetKey) {
+            const p = cachedTrainingPresets[presetKey];
+            if (!p) return;
+            document.getElementById("episodes").value = p.episodes;
+            document.getElementById("model-name").value = p.model_name;
+            document.getElementById("learning-rate").value = p.learning_rate;
+            document.getElementById("training-mode").value = p.mode;
+            document.getElementById("training-seed").value = p.seed;
+            document.getElementById("campaign-length").value = p.campaign_length;
+            document.getElementById("negotiation-rounds").value = p.negotiation_rounds;
+            document.getElementById("push-to-hub").checked = Boolean(p.push_to_hub);
+        }
+
         async function pollTrainingStatus() {
             const response = await fetch("/api/train/status");
             const status = await response.json();
@@ -620,6 +647,7 @@
         }
 
         refreshDatasetSummary();
+        loadTrainingPresets();
     </script>
 </body>
 </html>

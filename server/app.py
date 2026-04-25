@@ -52,6 +52,40 @@ except Exception as exc:  # pragma: no cover - keeps API bootable when RL stack 
 app = create_fastapi_app(SocAnalystEnvironment, SocAction, SocObservation)
 MULTI_AGENT_SESSIONS: Dict[str, SocAnalystEnvironment] = {}
 
+TRAINING_PRESETS = {
+    "run1_smoke": {
+        "episodes": 2,
+        "model_name": "distilgpt2",
+        "learning_rate": 1e-5,
+        "push_to_hub": False,
+        "mode": "single_agent",
+        "campaign_length": 20,
+        "negotiation_rounds": 2,
+        "seed": 42,
+    },
+    "run2_multi_agent": {
+        "episodes": 5,
+        "model_name": "distilgpt2",
+        "learning_rate": 8e-6,
+        "push_to_hub": False,
+        "mode": "multi_agent",
+        "campaign_length": 20,
+        "negotiation_rounds": 2,
+        "seed": 42,
+    },
+    "run3_campaign": {
+        "episodes": 8,
+        "model_name": "distilgpt2",
+        "learning_rate": 5e-6,
+        "push_to_hub": False,
+        "mode": "campaign",
+        "campaign_length": 30,
+        "negotiation_rounds": 3,
+        "seed": 42,
+    },
+}
+
+
 @app.get("/")
 def read_root():
     frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
@@ -94,6 +128,21 @@ def search_logs(query: str = "", max_results: int = 20):
 @app.get("/api/datasets/logs/summary")
 def logs_summary():
     return {"ok": True, "summary": uploaded_logs_summary()}
+
+
+@app.get("/healthz")
+def healthz():
+    return {
+        "ok": True,
+        "trainer_available": _trainer_import_error == "",
+        "trainer_error": _trainer_import_error or None,
+        "uploaded_logs": uploaded_logs_summary().get("total_logs", 0),
+    }
+
+
+@app.get("/api/train/presets")
+def train_presets():
+    return {"ok": True, "presets": TRAINING_PRESETS}
 
 
 @app.post("/api/train")

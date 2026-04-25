@@ -93,3 +93,21 @@ Milestone-3 campaign metrics exposed in status/report:
 - Prefer **GPU Space hardware** for PPO training.
 - Start with low episode count (5-20) to validate flow.
 - Once stable, increase episodes and move to larger models.
+
+## What Is Automated vs Manual
+
+### Done in code (already automated)
+- Dataset upload/search routes and UI tab.
+- Uploaded logs are used during `search_logs` when Splunk is unavailable.
+- Multi-agent and campaign environment metrics.
+- Training presets API:
+  - `GET /api/train/presets`
+- Runtime health check:
+  - `GET /healthz`
+
+### You still need to do
+- In Hugging Face Space, run **Factory Reboot** after dependency changes.
+- Set secrets if needed:
+  - `HF_TOKEN` (for private model access / push_to_hub)
+  - `HF_REPO_ID` (if `push_to_hub=true`)
+- Upload your own log files in the **Datasets** tab before training if not using Splunk.
