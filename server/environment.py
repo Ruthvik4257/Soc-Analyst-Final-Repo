@@ -307,7 +307,9 @@ class SocAnalystEnvironment(Environment):
         confidence: float = 0.5,
         evidence_refs: List[str] | None = None,
     ) -> None:
+        self._state.message_seq += 1
         msg = AgentMessage(
+            id=self._state.message_seq,
             sender=sender,
             recipient=recipient,
             message_type=message_type,

@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from openenv.core.env_server import create_fastapi_app
 from fastapi import BackgroundTasks, File, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from environment import SocAnalystEnvironment
 from models import SocAction, SocObservation
 from server.datasets import (
@@ -115,6 +115,22 @@ def configure_splunk(config: SplunkConfig):
         return {"ok": False, "message": f"Failed to configure Splunk: {exc}"}
 
 
+@app.post("/api/integrations/splunk/test")
+def test_splunk(config: SplunkConfig):
+    try:
+        client = SplunkClient(config)
+        if client._service is None:
+            return {
+                "ok": False,
+                "message": "Splunk SDK unavailable or could not build a service handle.",
+            }
+        # Lightweight server touch after connect
+        _ = client._service.info
+        return {"ok": True, "message": "Splunk connection test succeeded."}
+    except Exception as exc:
+        return {"ok": False, "message": f"Connection test failed: {exc}"}
+
+
 @app.post("/api/datasets/logs/upload")
 async def upload_logs(file: UploadFile = File(...)):
     content = await file.read()
@@ -182,6 +198,16 @@ def evaluate_rules(payload: dict):
     }
 
 
+_INVALID_EPISODE_BODY = {
+    "error_code": "INVALID_EPISODE",
+    "message": "Unknown episode_id",
+}
+
+
+def _invalid_episode_response():
+    return JSONResponse(status_code=400, content=_INVALID_EPISODE_BODY)
+
+
 @app.get("/healthz")
 def healthz():
     return {
@@ -190,6 +216,11 @@ def healthz():
         "trainer_error": _trainer_import_error or None,
         "uploaded_logs": uploaded_logs_summary().get("total_logs", 0),
     }
+
+
+@app.get("/api/health")
+def api_health():
+    return healthz()
 
 
 @app.get("/api/train/presets")
@@ -246,7 +277,7 @@ def multi_step(payload: dict):
     episode_id = payload.get("episode_id")
     action_payload = payload.get("action", {})
     if not episode_id or episode_id not in MULTI_AGENT_SESSIONS:
-        return {"ok": False, "message": "Unknown multi-agent episode_id"}
+        return _invalid_episode_response()
     env = MULTI_AGENT_SESSIONS[episode_id]
     action = SocAction(**action_payload)
     obs = env.step(action)
@@ -255,9 +286,9 @@ def multi_step(payload: dict):
 
 @app.get("/api/eval/metrics")
 def eval_metrics(episode_id: str):
-    env = MULTI_AGENT_SESSIONS.get(episode_id)
-    if env is None:
-        return {"ok": False, "message": "Unknown multi-agent episode_id"}
+    if not episode_id or episode_id not in MULTI_AGENT_SESSIONS:
+        return _invalid_episode_response()
+    env = MULTI_AGENT_SESSIONS[episode_id]
     metrics = env.state.episode_metrics.model_dump()
     return {"ok": True, "episode_id": episode_id, "mode": env.state.mode, "metrics": metrics}
 

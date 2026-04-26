@@ -1,0 +1,10 @@
+[theme]
+primaryColor = "#3b82f6"
+backgroundColor = "#09090b"
+secondaryBackgroundColor = "#18181b"
+textColor = "#f4f4f5"
+font = "sans serif"
+
+[server]
+# Avoid confusing multiple Streamlit / API ports in docs; use streamlit's default
+headless = true

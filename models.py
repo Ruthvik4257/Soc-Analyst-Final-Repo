@@ -8,6 +8,7 @@ DecisionType = Literal["false_positive", "escalate_tier2", "block_if_malicious"]
 
 
 class AgentMessage(State):
+    id: int = 0
     sender: AgentRole
     recipient: Literal["supervisor", "log_hunter", "threat_intel", "broadcast"]
     message_type: Literal["delegate", "report", "clarification", "final_decision"]
@@ -87,6 +88,7 @@ class SocObservation(Observation):
     episode_metrics: Optional[EpisodeMetrics] = None
 
 class SocState(State):
+    message_seq: int = 0
     difficulty: str = "easy"
     mode: Literal["single_agent", "multi_agent", "campaign"] = "single_agent"
     alert: dict = Field(default_factory=dict)
