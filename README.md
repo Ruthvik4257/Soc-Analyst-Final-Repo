@@ -53,6 +53,14 @@ The agent can query internal tools using:
 - Or: `uvicorn server.app:app --host 127.0.0.1 --port 8000` from the project root with `PYTHONPATH` set to that root.
 - If you host the static page elsewhere, set the **API base** field in the sidebar to your API’s URL (CORS is enabled for development).
 
+## Google Colab
+
+1. Open the notebook **`notebooks/SocAnalyst_Colab.ipynb`** in Colab: from [this Space repo](https://huggingface.co/spaces/Suryaai05/Soc-Analyst-Final-Repo) use **Open in Colab** if linked, or **File → Upload notebook** after [downloading the file from the `notebooks` folder](https://huggingface.co/spaces/Suryaai05/Soc-Analyst-Final-Repo/tree/main/notebooks), or paste the raw Git URL in Colab **File → Open notebook → GitHub** using your fork or the Space’s Git URL.
+2. **Runtime → Change runtime type** → set **T4 or A100 GPU** if you will run PPO training (optional for API-only).
+3. Run the cells in order: **clone** (edit `REPO_URL` if needed) → **pip install** → **start Uvicorn** and wait until `/healthz` succeeds (first start can take several minutes).
+4. Run the **API** cell: it calls `GET /api/datasets/summary` and `POST /api/train` on `http://127.0.0.1:8000` inside the same Colab session.
+5. (Optional) Add Colab **Secrets** `NGROK_AUTH_TOKEN` and run the **ngrok** cell for a public URL to the web UI and `/docs`.
+
 ## Hugging Face Space Deployment
 
 This repository is configured as a Docker Space (`sdk: docker`).
