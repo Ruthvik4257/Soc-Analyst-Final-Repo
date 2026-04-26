@@ -10,5 +10,10 @@ artifacts/
 # Local notes/context files
 context-from-OldChat.md
 
+# Never commit Kaggle API credentials
+notebooks/kaggle_secrets.json
+kaggle_secrets.json
+**/kaggle_secrets.json
+
 # Test/runtime temp outputs
 *.log
