@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from openenv.core.env_server import create_fastapi_app
 from fastapi import BackgroundTasks, File, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from environment import SocAnalystEnvironment
 from models import SocAction, SocObservation
 from server.datasets import (
@@ -101,8 +101,15 @@ TRAINING_PRESETS = {
 
 @app.get("/")
 def read_root():
-    frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "index.html")
-    return FileResponse(frontend_path)
+    """Streamlit is the web UI; this handler is for direct access to the API process (e.g. uvicorn on :8000)."""
+    return JSONResponse(
+        {
+            "service": "soc-analyst-api",
+            "message": "This port serves the OpenEnv + SOC REST API. Use Streamlit (see README) for the web console, or open /docs.",
+            "docs": "/docs",
+            "healthz": "/healthz",
+        }
+    )
 
 
 @app.post("/api/integrations/splunk")
@@ -432,7 +439,8 @@ def eval_report():
 
 def main():
     import uvicorn
-    uvicorn.run("server.app:app", host="0.0.0.0", port=7860, reload=True)
+    # Default dev port 8000 matches streamlit `SOC_API_BASE` and README local instructions.
+    uvicorn.run("server.app:app", host="0.0.0.0", port=8000, reload=True)
 
 if __name__ == '__main__':
     main()

@@ -26,7 +26,7 @@ class StateManager:
         st.session_state["training_poll_count"] = 0
         st.session_state["last_observation"] = None
         st.session_state.setdefault(
-            "api_base", os.environ.get("SOC_API_BASE", "http://127.0.0.1:7860")
+            "api_base", os.environ.get("SOC_API_BASE", "http://127.0.0.1:8000")
         )
 
     @property
@@ -84,7 +84,7 @@ class StateManager:
     @property
     def api_base(self) -> str:
         """Read-only: value comes from the sidebar `text_input` with key ``api_base``."""
-        return str(st.session_state.get("api_base", "http://127.0.0.1:7860")).rstrip("/")
+        return str(st.session_state.get("api_base", "http://127.0.0.1:8000")).rstrip("/")
 
     def sync_transcript(
         self, transcript: List[Dict[str, Any]], cap: int = 5000

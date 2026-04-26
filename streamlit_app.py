@@ -224,11 +224,11 @@ def _terminal_tab(client: APIClient, sm: StateManager) -> None:
 def _integrations_tab(client: APIClient) -> None:
     st.subheader("Splunk")
     with st.form("splunk_form"):
-        h = st.text_input("Host", value="127.0.0.1")
-        p = st.number_input("Port", value=8089, min_value=1, max_value=65535)
-        u = st.text_input("Username", value="admin")
-        pw = st.text_input("Password", type="password")
-        scheme = st.selectbox("Scheme", ["https", "http"])
+        h = st.text_input("Host", value="127.0.0.1", key="integ_splunk_host")
+        p = st.number_input("Port", value=8089, min_value=1, max_value=65535, key="integ_splunk_port")
+        u = st.text_input("Username", value="admin", key="integ_splunk_user")
+        pw = st.text_input("Password", type="password", key="integ_splunk_pw")
+        scheme = st.selectbox("Scheme", ["https", "http"], key="integ_splunk_scheme")
         tcol, scol, ccol = st.columns([1, 1, 1])
         with tcol:
             test = st.form_submit_button("Test connection", use_container_width=True)
@@ -258,9 +258,17 @@ def _integrations_tab(client: APIClient) -> None:
 
 def _datasets_tab(client: APIClient) -> None:
     st.caption("Upload and explore uploaded logs (server-side in-memory store).")
-    f = st.file_uploader("Log bundle", type=["log", "txt", "csv", "json", "jsonl"])
-    if f is not None:
-        if st.button("Upload", use_container_width=True, key="ds_upload"):
+    with st.form("ds_upload_form", clear_on_submit=False):
+        f = st.file_uploader(
+            "Log bundle",
+            type=["log", "txt", "csv", "json", "jsonl"],
+            key="ds_file_uploader",
+        )
+        upload_submitted = st.form_submit_button("Upload", use_container_width=True, type="primary")
+    if upload_submitted:
+        if f is None:
+            st.warning("Choose a file before uploading.")
+        else:
             data = f.getvalue()
             try:
                 r, _ = client.upload_logs(data, f.name)
@@ -299,8 +307,8 @@ def _datasets_tab(client: APIClient) -> None:
 @st.fragment(run_every=2.0)
 def _training_status_fragment(client: APIClient) -> None:
     """
-    Isolated 2s polling: does NOT rerun the full app, so other tabs' buttons keep working
-    (replaces st_autorefresh, which re-ran the entire script and broke widget clicks).
+    Isolated 2s polling: does NOT rerun the full app (only this fragment).
+    Only mounted when training_state is running so idle runs do not schedule polling.
     """
     sm = StateManager()
     if sm.training_state != "running":
@@ -347,6 +355,27 @@ def _training_status_fragment(client: APIClient) -> None:
         st.caption("No `history` yet in this run.")
 
 
+def _training_last_report_charts(client: APIClient) -> None:
+    """Reward history from the server report (when not in live-refresh mode)."""
+    try:
+        rep = client.eval_report()
+    except APIError as e:
+        st.warning(f"Report: {e}")
+        return
+    history = (rep or {}).get("history") or []
+    if not history:
+        st.caption("No `history` in the last report (train at least one episode, or use **Refresh presets** / restart API).")
+        return
+    chart = pd.DataFrame(
+        {
+            "episode": [h.get("episode") for h in history],
+            "reward": [h.get("reward") for h in history],
+        }
+    )
+    st.subheader("Episode rewards (last report)")
+    st.line_chart(chart.set_index("episode"))
+
+
 def _training_tab(client: APIClient, sm: StateManager) -> None:
     st.caption("Training loop status (server-side PPO / TRL). Presets are cached 5 min.")
     c1, c2, c3 = st.columns([1, 1, 1], gap="small")
@@ -365,7 +394,11 @@ def _training_tab(client: APIClient, sm: StateManager) -> None:
         st.error(f"Presets: {e}")
         presets = {}
 
-    choice = st.selectbox("Preset", list(presets.keys()) or ["(no presets)"])
+    choice = st.selectbox(
+        "Preset",
+        list(presets.keys()) or ["(no presets)"],
+        key="train_preset_select",
+    )
     body = dict(presets.get(choice, {})) if choice in presets else {"episodes": 1, "model_name": "distilgpt2"}
     st.json(body)
 
@@ -387,8 +420,14 @@ def _training_tab(client: APIClient, sm: StateManager) -> None:
             sm.loading = False
 
     st.divider()
-    st.caption("While training is **running**, the section below refreshes on its own (other tabs stay responsive).")
-    _training_status_fragment(client)
+    st.caption(
+        "While training is **running**, the section below refreshes on its own (only this view is shown; no background tab polling)."
+    )
+    if sm.training_state == "running":
+        _training_status_fragment(client)
+    else:
+        st.caption("Live JSON and chart appear here during a run. After training stops, the chart below reflects the last report.")
+        _training_last_report_charts(client)
 
 
 def main() -> None:
@@ -417,16 +456,24 @@ def main() -> None:
         h = {"ok": False}
     st.sidebar.caption("Trainer" if h.get("trainer_available") is True else h.get("trainer_error", "—"))
 
-    tab_tr, tab_in, tab_ds, tab_train = st.tabs(
-        ["🖥️ Terminal", "🔌 Integrations", "📂 Datasets", "🧠 Training"]
+    # Single-section layout (not st.tabs): avoids rendering all panes on every run and prevents
+    # background fragment/timer interactions from breaking other sections.
+    view = st.radio(
+        "Console",
+        ["🖥️ Terminal", "🔌 Integrations", "📂 Datasets", "🧠 Training"],
+        horizontal=True,
+        key="soc_main_view",
+        label_visibility="collapsed",
     )
-    with tab_tr:
+    st.caption("Terminal · Integrations · Datasets · Training")
+    st.divider()
+    if view == "🖥️ Terminal":
         _terminal_tab(client, sm)
-    with tab_in:
+    elif view == "🔌 Integrations":
         _integrations_tab(client)
-    with tab_ds:
+    elif view == "📂 Datasets":
         _datasets_tab(client)
-    with tab_train:
+    else:
         _training_tab(client, sm)
 
 

@@ -33,8 +33,7 @@ The agent can query internal tools using:
 - `server/environment.py`: Single-agent, multi-agent, and campaign environment logic.
 - `server/rl_trainer.py`: PPO training loop and training report generation.
 - `server/app.py`: API routes for environment interaction, training, and metrics.
-- `frontend/index.html`: Legacy static UI (optional; OpenAPI and API still available under documented paths).
-- `streamlit_app.py`, `utils/`, `.streamlit/config.toml`: SOC dark-mode Streamlit console (primary UI in Docker Space).
+- `streamlit_app.py`, `utils/`, `.streamlit/config.toml`: SOC dark-mode Streamlit console (primary UI in Docker Space and for local use).
 - `docker/entrypoint.sh`, `docker/nginx.conf.template`: Nginx reverse proxy so the Space serves Streamlit on `/` and FastAPI on `/api/`, `/docs`, `/healthz`, OpenEnv routes, etc.
 
 ## Usage
@@ -47,6 +46,12 @@ The agent can query internal tools using:
    ```bash
    python inference.py
    ```
+
+## Run the API + Streamlit on your PC (Windows)
+
+- Double-click **`run_local.cmd`** in this folder, **or** in PowerShell: `.\run_local.ps1`  
+  That starts **FastAPI** on [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) and **Streamlit** on [http://127.0.0.1:8501](http://127.0.0.1:8501) in two separate windows. The first time, wait until Uvicorn prints “Application startup” (model imports can take a minute or two).
+- The sidebar **API base URL** should be `http://127.0.0.1:8000` (or set `SOC_API_BASE` to the same value).
 
 ## Hugging Face Space Deployment
 
