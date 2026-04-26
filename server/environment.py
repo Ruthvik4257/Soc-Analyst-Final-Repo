@@ -382,7 +382,12 @@ class SocAnalystEnvironment(Environment):
         done = False
         message = ""
 
-        if role != self._state.active_agent:
+        # Analyst UI: supervisor take_action may finalize on any turn (turn order still applies to other actions).
+        supervisor_take = (
+            action.action_type == "take_action"
+            and (action.agent_role or "supervisor") == "supervisor"
+        )
+        if not supervisor_take and role != self._state.active_agent:
             self._state.episode_metrics.invalid_actions += 1
             self._state.episode_metrics.mistakes_made += 1
             self._state.mistake_made = True

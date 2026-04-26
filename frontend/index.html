@@ -134,8 +134,8 @@
   <header>
     <h1>SOC Analyst · Incident console</h1>
     <nav class="links">
-      <a href="/docs" target="_blank" rel="noopener">API docs</a>
-      <a href="/healthz" target="_blank" rel="noopener">healthz</a>
+      <a id="aDocs" href="docs" target="_blank" rel="noopener">API docs</a>
+      <a id="aHealth" href="healthz" target="_blank" rel="noopener">healthz</a>
     </nav>
   </header>
 
@@ -145,6 +145,11 @@
       <input id="apiBase" type="text" placeholder="e.g. http://127.0.0.1:8000" autocomplete="off" />
       <button type="button" class="secondary" id="btnHealth" style="width:100%;">Check /healthz</button>
       <div id="healthOut"></div>
+      <hr style="border-color: var(--border); margin: 1rem 0;" />
+      <label for="fileLogs" style="color: var(--muted);">Log upload (works when hidden in tabs)</label>
+      <input type="file" id="fileLogs" accept=".log,.txt,.csv,.json,.jsonl" style="max-width:100%; margin: 0.35rem 0 0.5rem;" />
+      <button type="button" class="primary" id="btnUpload" style="width:100%;">Upload logs</button>
+      <div id="upMsg" style="margin-top:0.5rem; font-size:0.8rem;"></div>
     </aside>
 
     <main>
@@ -225,12 +230,8 @@
 
       <section id="panel-datasets" class="soc-panel" role="tabpanel" aria-labelledby="soc-t-datasets">
         <div class="card">
-          <h2>Upload logs</h2>
-          <input type="file" id="fileLogs" accept=".log,.txt,.csv,.json,.jsonl" />
-          <div style="margin-top:0.5rem">
-            <button type="button" class="primary" id="btnUpload">Upload</button>
-          </div>
-          <div id="upMsg"></div>
+          <h2>Upload</h2>
+          <p style="color:var(--muted); font-size:0.88rem; margin:0 0 0.5rem;">Use the <strong>sidebar</strong> to choose a file and upload (avoids hidden-panel browser limits).</p>
         </div>
         <div class="card">
           <h2>Search in uploaded logs</h2>
@@ -282,23 +283,42 @@
         a.textContent = (a.textContent + "\n" + line).split("\n").slice(-100).join("\n");
       };
 
-      function baseUrl() {
-        return (el("apiBase").value || "").trim().replace(/\/+$/, "");
-      }
-      function apiCall(path) {
-        const b = baseUrl();
-        if (b) return b + path;
-        return path;
+      /** Resolves api/... under the current page path (fixes path-based hosting; avoids fetch('/api/') hitting wrong path). */
+      function apiUrl(path) {
+        const raw = (path || "").replace(/^\/+/, "");
+        const custom = (el("apiBase") && el("apiBase").value || "").trim().replace(/\/+$/, "");
+        if (custom) return custom + "/" + raw;
+        const loc = new URL(window.location.href);
+        let p = loc.pathname;
+        if (!p.endsWith("/")) {
+          const last = p.split("/").pop() || "";
+          if (last && /\.[a-z0-9]+$/i.test(last)) p = p.replace(/\/[^/]*$/, "/");
+          else p += "/";
+        }
+        if (!p.endsWith("/")) p += "/";
+        return loc.origin + p + raw;
       }
 
+      function relLink(path) {
+        return apiUrl(path.replace(/^\//, ""));
+      }
+
+      document.getElementById("aDocs").setAttribute("href", relLink("docs"));
+      document.getElementById("aHealth").setAttribute("href", relLink("healthz"));
+
       async function jsonFetch(path, options) {
-        const url = apiCall(path);
+        const url = apiUrl(path);
         const r = await fetch(url, options);
         const text = await r.text();
         let data;
         try { data = text ? JSON.parse(text) : null; } catch { data = { _raw: text }; }
         if (!r.ok) {
-          const err = new Error(data && data.message || text || "HTTP " + r.status);
+          let m = (data && data.message) || "";
+          if (!m && data && data.detail !== undefined) {
+            m = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+          }
+          if (!m) m = text || ("HTTP " + r.status);
+          const err = new Error(m);
           err.status = r.status; err.data = data; throw err;
         }
         return data;
@@ -338,7 +358,7 @@
       });
 
       function stepWithDecision(decision) {
-        if (!episodeId) return;
+        if (!episodeId) return Promise.resolve(null);
         const body = {
           episode_id: episodeId,
           action: {
@@ -422,11 +442,12 @@
         const fd = new FormData();
         fd.append("file", f);
         try {
-          const url = apiCall("/api/datasets/logs/upload");
-          const r = await fetch(url, { method: "POST", body: fd });
+          const url = apiUrl("api/datasets/logs/upload");
+          const r = await fetch(url, { method: "POST", body: fd, credentials: "same-origin" });
           const text = await r.text();
-          const d = text ? JSON.parse(text) : {};
-          m.innerHTML = '<p class="msg ' + (r.ok && d.ok !== false ? "ok" : "error") + '">' + (d.message || text) + "</p>";
+          let d = {};
+          try { d = text ? JSON.parse(text) : {}; } catch { d = { _raw: text }; }
+          m.innerHTML = '<p class="msg ' + (r.ok && d.ok !== false ? "ok" : "error") + '">' + (d.message || text || r.status) + "</p>";
         } catch (e) {
           m.innerHTML = '<p class="msg error">' + e.message + "</p>";
         }
