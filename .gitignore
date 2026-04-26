@@ -1,0 +1,14 @@
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Runtime outputs and local training artifacts
+artifacts/
+
+# Local notes/context files
+context-from-OldChat.md
+
+# Test/runtime temp outputs
+*.log
