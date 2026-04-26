@@ -192,6 +192,97 @@ def search_uploaded_logs(query: str, max_results: int = 50) -> List[Dict[str, An
     return hits
 
 
+_SPL_NOISE = re.compile(
+    r"\b(search|index|sourcetype|source|as|by|earliest|latest|head|where|sort|"
+    r"dedup|stats|count|table|or|and|not|true|false|main)\b",
+    re.IGNORECASE,
+)
+
+
+def _query_search_terms(text: str) -> List[str]:
+    """Tokenize a Splunk line or free-text query for substring log search."""
+    if not (text or "").strip():
+        return []
+    s = (text or "").lower()
+    cleaned = _SPL_NOISE.sub(" ", s)
+    out: List[str] = []
+    for m in re.finditer(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", cleaned):
+        out.append(m.group(0))
+    for m in re.finditer(r"\b[aA]-[0-9A-Za-z\-]{2,}\b", text):
+        out.append(m.group(0))
+    for token in re.findall(r"[A-Za-z0-9@._%+\-]+", text):
+        tl = token.lower()
+        if len(tl) < 3 or tl in ("main", "all", "and", "the", "for", "not", "or"):
+            continue
+        out.append(token)
+    seen: set = set()
+    uniq: List[str] = []
+    for t in out:
+        k = t.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(t)
+    return uniq[:20]
+
+
+def _alert_probe_terms(alert: Optional[Dict[str, Any]]) -> List[str]:
+    if not alert:
+        return []
+    keys = ("ip", "id", "user", "hash", "type", "target", "hostname", "source")
+    out: List[str] = []
+    for k in keys:
+        v = str(alert.get(k) or "").strip()
+        if v:
+            out.append(v)
+    return out
+
+
+def search_uploaded_logs_best_effort(
+    query: str,
+    max_results: int = 10,
+    alert: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Match ingested logs against a Spl/SPL-style or natural query.
+    Tries the full string, decomposed terms, and alert fields; if uploads exist
+    but nothing matches, returns a head sample (same as empty search).
+    """
+    candidates: List[str] = []
+    q0 = (query or "").strip()
+    if q0:
+        candidates.append(q0)
+    candidates.extend(_query_search_terms(query or ""))
+    candidates.extend(_alert_probe_terms(alert))
+
+    seen_c: set = set()
+    ordered: List[str] = []
+    for c in candidates:
+        c = (c or "").strip()
+        if not c:
+            continue
+        k = c.lower()
+        if k in seen_c:
+            continue
+        seen_c.add(k)
+        ordered.append(c)
+
+    out: List[Dict[str, Any]] = []
+    seen_row: set = set()
+    for c in ordered:
+        for row in search_uploaded_logs(c, max_results=max_results):
+            key = (row.get("source"), row.get("ts_ms"), row.get("raw"))
+            if key in seen_row:
+                continue
+            seen_row.add(key)
+            out.append(row)
+            if len(out) >= max_results:
+                return out
+    if not out and UPLOADED_LOGS:
+        return search_uploaded_logs("", max_results=max_results)
+    return out
+
+
 def uploaded_logs_summary() -> Dict[str, Any]:
     sources: Dict[str, int] = {}
     for item in UPLOADED_LOGS:

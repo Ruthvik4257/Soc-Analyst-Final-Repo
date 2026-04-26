@@ -22,7 +22,7 @@ except Exception:
     TRL_BACKEND = "fallback_no_ppo"
 
 from models import SocAction
-from server.datasets import search_uploaded_logs
+from server.datasets import search_uploaded_logs_best_effort
 from server.environment import SocAnalystEnvironment
 from server.integrations import execute_spl
 
@@ -105,11 +105,20 @@ def _build_supervisor_prompt(alert_details: Dict[str, Any], logs: List[Dict[str,
     )
 
 
-def _resolve_logs_for_query(query: str) -> List[Dict[str, Any]]:
+def _resolve_logs_for_query(
+    query: str, alert: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """Prefer Splunk when available; else match uploaded data by SPL tokens / alert / sample."""
     logs = execute_spl(query)
-    if logs and not (len(logs) == 1 and "error" in logs[0]):
+    if logs and not (
+        len(logs) == 1
+        and isinstance(logs[0], dict)
+        and "error" in logs[0]
+    ):
         return logs
-    uploaded = search_uploaded_logs(query, max_results=10)
+    uploaded = search_uploaded_logs_best_effort(
+        query, max_results=10, alert=alert
+    )
     return uploaded if uploaded else logs
 
 
@@ -170,7 +179,7 @@ def _train_single_agent_episode(
     response_tensors = generated[:, query_tensors.shape[1] :]
     generated_text = tokenizer.decode(generated[0], skip_special_tokens=True)
     spl_query = _parse_spl(generated_text, fallback=f"search index=main {alert_details.get('id', '')}")
-    logs = _resolve_logs_for_query(spl_query)
+    logs = _resolve_logs_for_query(spl_query, alert_details)
 
     supervisor_prompt = _build_supervisor_prompt(alert_details, logs)
     sup_query_tensors = tokenizer(supervisor_prompt, return_tensors="pt").input_ids.to(device)

@@ -7,7 +7,7 @@ from openenv.core.env_server import Environment
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from models import AgentMessage, AgentObservation, SocAction, SocObservation, SocState
-from server.datasets import search_uploaded_logs
+from server.datasets import search_uploaded_logs, search_uploaded_logs_best_effort
 from server.integrations import get_splunk_client
 from server.threat_rules import validate_decision
 
@@ -159,24 +159,27 @@ class SocAnalystEnvironment(Environment):
                 reward = 0.1
                 if "logs_checked" not in self._state.evidence_collected:
                     self._state.evidence_collected.append("logs_checked")
-            elif search_uploaded_logs(action.query or "", max_results=5):
-                results = search_uploaded_logs(action.query or "", max_results=5)
-                message = f"Uploaded log hits: {str(results)[:500]}"
-                reward = 0.1
-                if "logs_checked" not in self._state.evidence_collected:
-                    self._state.evidence_collected.append("logs_checked")
-            elif action.query == "203.0.113.5" and self._state.difficulty == "easy":
-                message = "Logs for 203.0.113.5: 15 failed logins, 0 successful."
-                reward = 0.1
-                if "logs_checked" not in self._state.evidence_collected:
-                    self._state.evidence_collected.append("logs_checked")
-            elif action.query == "jsmith" and self._state.difficulty == "hard":
-                message = "Logs for jsmith: successful login via VPN."
-                reward = 0.1
-                if "logs_checked" not in self._state.evidence_collected:
-                    self._state.evidence_collected.append("logs_checked")
             else:
-                message = f"No useful logs found for '{action.query}'."
+                hits = search_uploaded_logs_best_effort(
+                    action.query or "", max_results=5, alert=self._state.alert
+                )
+                if hits:
+                    message = f"Uploaded log hits: {str(hits)[:500]}"
+                    reward = 0.1
+                    if "logs_checked" not in self._state.evidence_collected:
+                        self._state.evidence_collected.append("logs_checked")
+                elif action.query == "203.0.113.5" and self._state.difficulty == "easy":
+                    message = "Logs for 203.0.113.5: 15 failed logins, 0 successful."
+                    reward = 0.1
+                    if "logs_checked" not in self._state.evidence_collected:
+                        self._state.evidence_collected.append("logs_checked")
+                elif action.query == "jsmith" and self._state.difficulty == "hard":
+                    message = "Logs for jsmith: successful login via VPN."
+                    reward = 0.1
+                    if "logs_checked" not in self._state.evidence_collected:
+                        self._state.evidence_collected.append("logs_checked")
+                else:
+                    message = f"No useful logs found for '{action.query}'."
                 
         elif at == "get_threat_intel":
             if action.indicator == "203.0.113.5" and self._state.difficulty == "easy":
@@ -473,11 +476,14 @@ class SocAnalystEnvironment(Environment):
                     if splunk_client is not None:
                         results = splunk_client.search(action.query or "")
                         report = str(results)[:300]
-                    elif search_uploaded_logs(action.query or "", max_results=5):
-                        results = search_uploaded_logs(action.query or "", max_results=5)
-                        report = f"Uploaded log hits: {str(results)[:300]}"
                     else:
-                        report = f"Mock logs for query={action.query or 'n/a'}"
+                        hits = search_uploaded_logs_best_effort(
+                            action.query or "", max_results=5, alert=self._state.alert
+                        )
+                        if hits:
+                            report = f"Uploaded log hits: {str(hits)[:300]}"
+                        else:
+                            report = f"Mock logs for query={action.query or 'n/a'}"
                     if "logs_checked" not in self._state.evidence_collected:
                         self._state.evidence_collected.append("logs_checked")
                     self._append_message(
