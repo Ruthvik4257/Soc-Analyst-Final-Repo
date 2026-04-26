@@ -110,7 +110,10 @@ TRAINING_PRESETS = {
 @app.get("/")
 def read_root():
     root_dir = os.path.dirname(os.path.dirname(__file__))
-    return FileResponse(os.path.join(root_dir, "frontend", "index.html"))
+    return FileResponse(
+        os.path.join(root_dir, "frontend", "index.html"),
+        media_type="text/html",
+    )
 
 
 @app.post("/api/integrations/splunk")
