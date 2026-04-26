@@ -191,6 +191,12 @@ def logs_summary():
     return {"ok": True, "summary": uploaded_logs_summary()}
 
 
+@app.get("/api/datasets/summary")
+def datasets_summary_alias():
+    """Alias for clients that call /api/datasets/summary (same as /api/datasets/logs/summary)."""
+    return {"ok": True, "summary": uploaded_logs_summary()}
+
+
 @app.get("/api/rules/catalog")
 def get_rules_catalog():
     return {"ok": True, "catalog": rules_catalog()}
