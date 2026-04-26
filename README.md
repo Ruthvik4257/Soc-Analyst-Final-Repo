@@ -61,6 +61,8 @@ The container exposes a **single public port** (`PORT`, default **7860**). **ngi
 
 Init uses **tini** so child processes are reaped. First boot can take **several minutes** on CPU while PyTorch and the app import; the entrypoint waits up to ~5 minutes for `GET /healthz` before starting nginx.
 
+**Large log uploads:** nginx is configured for **up to ~2GB** per request (`client_max_body_size`). The API will reject bodies over **`MAX_UPLOAD_BYTES`** (default 2GB). Ingested lines are capped at **`MAX_LOG_ENTRIES`** (default 500,000) per file to protect RAM. After upload, use **Datasets → Search** with an empty query to list the first 200 lines, or a keyword to filter.
+
 ### 1) Push this repo to a Hugging Face Space
 - Create a Space.
 - Choose **Docker** SDK.

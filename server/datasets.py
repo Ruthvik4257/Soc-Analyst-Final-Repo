@@ -3,10 +3,14 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
+
+# Prevent OOM: cap lines ingested per upload (tune with env on large Spaces)
+MAX_LOG_ENTRIES = max(1, int(os.environ.get("MAX_LOG_ENTRIES", "500000")))
 
 
 @dataclass
@@ -99,14 +103,49 @@ def _to_entry(source: str, raw: str, fields: Dict[str, Any] | None = None) -> Up
     )
 
 
-def add_logs_from_content(filename: str, content: bytes) -> int:
+def add_logs_from_content(filename: str, content: bytes) -> Tuple[int, Optional[str]]:
+    """
+    Ingest file into UPLOADED_LOGS. Returns (inserted_count, optional_warning).
+    Line-based formats stream over bytes to avoid double-buffering a huge decode().
+    """
     lower = filename.lower()
-    text = content.decode("utf-8", errors="ignore")
     before = len(UPLOADED_LOGS)
+    warning: Optional[str] = None
 
-    if lower.endswith(".json") or lower.endswith(".jsonl"):
-        for line in text.splitlines():
-            line = line.strip()
+    def at_cap() -> bool:
+        return (len(UPLOADED_LOGS) - before) >= MAX_LOG_ENTRIES
+
+    if at_cap():
+        return 0, "In-memory log cap reached; use POST /api/datasets/logs/clear or lower MAX_LOG_ENTRIES."
+
+    if lower.endswith(".csv"):
+        stream = io.TextIOWrapper(
+            io.BytesIO(content), encoding="utf-8", errors="replace", newline=""
+        )
+        try:
+            reader = csv.DictReader(stream)
+            for row in reader:
+                if at_cap():
+                    warning = (
+                        f"Import stopped at {MAX_LOG_ENTRIES:,} rows (safety cap MAX_LOG_ENTRIES). "
+                        "For huge CSV, split the file or raise the cap via env (watch RAM)."
+                    )
+                    break
+                raw = ", ".join(f"{k}={v}" for k, v in (row or {}).items())
+                UPLOADED_LOGS.append(_to_entry(filename, raw, dict(row or {})))
+        finally:
+            stream.detach()
+
+    elif lower.endswith(".json") or lower.endswith(".jsonl"):
+        # One JSON per line; stream lines from bytes
+        for raw_line in io.BytesIO(content):
+            if at_cap():
+                warning = (
+                    f"Import stopped at {MAX_LOG_ENTRIES:,} lines (safety cap MAX_LOG_ENTRIES). "
+                    "For very large .jsonl, split or increase MAX_LOG_ENTRIES (watch memory)."
+                )
+                break
+            line = raw_line.rstrip(b"\r\n").decode("utf-8", errors="ignore").strip()
             if not line:
                 continue
             try:
@@ -117,19 +156,21 @@ def add_logs_from_content(filename: str, content: bytes) -> int:
                     UPLOADED_LOGS.append(_to_entry(filename, str(payload)))
             except json.JSONDecodeError:
                 UPLOADED_LOGS.append(_to_entry(filename, line))
-    elif lower.endswith(".csv"):
-        reader = csv.DictReader(io.StringIO(text))
-        for row in reader:
-            raw = ", ".join(f"{k}={v}" for k, v in row.items())
-            UPLOADED_LOGS.append(_to_entry(filename, raw, dict(row)))
+
     else:
-        # .log/.txt and unknown plain text: one line = one log
-        for line in text.splitlines():
-            line = line.strip()
+        for raw_line in io.BytesIO(content):
+            if at_cap():
+                warning = (
+                    f"Import stopped at {MAX_LOG_ENTRIES:,} lines (safety cap). "
+                    "Use smaller samples, split files, or raise MAX_LOG_ENTRIES (watch memory)."
+                )
+                break
+            line = raw_line.rstrip(b"\r\n").decode("utf-8", errors="ignore").strip()
             if line:
                 UPLOADED_LOGS.append(_to_entry(filename, line))
 
-    return len(UPLOADED_LOGS) - before
+    inserted = len(UPLOADED_LOGS) - before
+    return inserted, warning
 
 
 def clear_uploaded_logs() -> None:

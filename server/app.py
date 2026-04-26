@@ -142,13 +142,34 @@ def test_splunk(config: SplunkConfig):
         return {"ok": False, "message": f"Connection test failed: {exc}"}
 
 
+# Default 2GB; nginx must also allow the body (see docker/nginx.conf.template client_max_body_size)
+_MAX_UPLOAD = max(1, int(os.environ.get("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024))))
+
+
 @app.post("/api/datasets/logs/upload")
 async def upload_logs(file: UploadFile = File(...)):
     content = await file.read()
-    inserted = add_logs_from_content(file.filename or "uploaded.log", content)
+    n = len(content)
+    if n > _MAX_UPLOAD:
+        return JSONResponse(
+            status_code=413,
+            content={
+                "ok": False,
+                "message": f"File is {n} bytes; max is {_MAX_UPLOAD} bytes. Set env MAX_UPLOAD_BYTES to raise the limit (and match nginx).",
+                "size_bytes": n,
+                "max_bytes": _MAX_UPLOAD,
+            },
+        )
+    inserted, warn = add_logs_from_content(file.filename or "uploaded.log", content)
+    parts = [f"Received {n:,} bytes, added {inserted:,} log line(s) from {file.filename}."]
+    if warn:
+        parts.append(warn)
     return {
         "ok": True,
-        "message": f"Uploaded {inserted} log entries from {file.filename}.",
+        "message": " ".join(parts),
+        "size_bytes": n,
+        "inserted": inserted,
+        "warning": warn,
         "summary": uploaded_logs_summary(),
     }
 

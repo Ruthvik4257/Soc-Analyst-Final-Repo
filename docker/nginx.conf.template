@@ -19,7 +19,8 @@ http {
 
   server {
     listen ${PORT};
-    client_max_body_size 200M;
+    # 850MB+ log bundles; set lower via nginx override if the Space is memory-limited
+    client_max_body_size 2G;
     proxy_read_timeout  3600s;
     proxy_send_timeout  3600s;
     large_client_header_buffers 8 32k;
