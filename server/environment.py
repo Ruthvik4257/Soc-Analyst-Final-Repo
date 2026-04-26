@@ -1,7 +1,7 @@
 import os
 import sys
 import uuid
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from openenv.core.env_server import Environment
 
@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from models import AgentMessage, AgentObservation, SocAction, SocObservation, SocState
 from server.datasets import search_uploaded_logs
 from server.integrations import get_splunk_client
+from server.threat_rules import validate_decision
 
 class SocAnalystEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS = True
@@ -36,6 +37,48 @@ class SocAnalystEnvironment(Environment):
         if self._state.difficulty == "medium":
             return "escalate_tier2"
         return "false_positive"
+
+    def _gather_validation_logs(self, action: SocAction) -> List[Dict]:
+        # Pull a bounded set of logs likely related to the current alert.
+        probe_terms = [
+            action.query or "",
+            self._state.alert.get("ip", ""),
+            self._state.alert.get("hash", ""),
+            self._state.alert.get("user", ""),
+            self._state.alert.get("id", ""),
+            self._state.alert.get("type", ""),
+        ]
+        results: List[Dict] = []
+        seen = set()
+        for term in probe_terms:
+            term = str(term or "").strip()
+            if not term:
+                continue
+            for row in search_uploaded_logs(term, max_results=20):
+                key = (row.get("source"), row.get("ts_ms"), row.get("raw"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append(row)
+                if len(results) >= 60:
+                    return results
+        if not results:
+            results = search_uploaded_logs("", max_results=40)
+        return results
+
+    def _apply_validation_metrics(self, model_decision: str, validation: Any, passed: bool) -> None:
+        self._state.episode_metrics.last_validation_model_decision = model_decision or ""
+        self._state.episode_metrics.last_validation_recommended_decision = validation.recommended_decision
+        self._state.episode_metrics.last_validation_passed = passed
+        self._state.episode_metrics.last_validation_confidence = float(validation.confidence)
+        self._state.episode_metrics.last_validation_severity = validation.severity
+        self._state.episode_metrics.last_validation_score = float(validation.score)
+        factors = list(validation.factors[:5])
+        if validation.anomaly_signals:
+            factors.append(f"anomaly_signals={len(validation.anomaly_signals)}")
+        if validation.ioc_hits:
+            factors.append(f"ioc_hits={','.join(validation.ioc_hits[:3])}")
+        self._state.episode_metrics.last_validation_factors = factors
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> SocObservation:
         # Accept difficulty from both direct and nested reset payloads.
@@ -170,19 +213,35 @@ class SocAnalystEnvironment(Environment):
                 
         elif at == "take_action":
             done = True
-            expected = self._resolve_expected_decision()
+            validation_logs = self._gather_validation_logs(action)
+            rule_result = validate_decision(self._state.alert, validation_logs)
+            expected = rule_result.recommended_decision
             self._state.expected_decision = expected
+            factors_text = " | ".join(rule_result.factors[:3])
+
             if action.decision == expected:
+                self._apply_validation_metrics(action.decision or "", rule_result, passed=True)
                 if self._state.difficulty == "hard" and "ti_checked" not in self._state.evidence_collected:
-                    message = f"You guessed {action.decision} but didn't check threat intel to verify! Score: 0.1."
-                    reward = 0.1
-                    self._state.score = 0.1
+                    message = (
+                        f"Decision aligns with rules ({expected}) but threat intel evidence was not collected. "
+                        f"Rule score={rule_result.score}. Factors: {factors_text}"
+                    )
+                    reward = 0.2
+                    self._state.score = 0.2
                 else:
-                    message = f"Correctly resolved alert as {action.decision}."
+                    message = (
+                        f"Decision verified by threat rules: {action.decision}. "
+                        f"Rule score={rule_result.score}, confidence={rule_result.confidence}. "
+                        f"Factors: {factors_text}"
+                    )
                     reward = 0.99
                     self._state.score = 0.99
             else:
-                message = f"Incorrect decision: {action.decision}. Expected: {expected}."
+                self._apply_validation_metrics(action.decision or "", rule_result, passed=False)
+                message = (
+                    f"Decision failed threat-rule validation. Predicted={action.decision}, "
+                    f"recommended={expected}, rule_score={rule_result.score}. Factors: {factors_text}"
+                )
                 reward = -0.5
                 # Keep task scores strictly within (0, 1) for OpenEnv validators.
                 self._state.score = 0.01
@@ -362,7 +421,9 @@ class SocAnalystEnvironment(Environment):
                 reward = 0.02
                 message = "Supervisor requested clarification from specialists."
             elif action.action_type == "take_action":
-                expected = self._resolve_expected_decision()
+                validation_logs = self._gather_validation_logs(action)
+                rule_result = validate_decision(self._state.alert, validation_logs)
+                expected = rule_result.recommended_decision
                 self._state.expected_decision = expected
                 self._append_message(
                     sender="supervisor",
@@ -374,17 +435,25 @@ class SocAnalystEnvironment(Environment):
                 )
                 done = True
                 if action.decision == expected:
+                    self._apply_validation_metrics(action.decision or "", rule_result, passed=True)
                     suff = self._evidence_sufficiency()
                     reward = 0.8 + (0.2 * suff)
                     self._state.score = min(0.99, reward)
                     self._state.episode_metrics.useful_actions += 1
-                    message = f"Correctly resolved alert as {action.decision} with evidence sufficiency {suff:.2f}."
+                    message = (
+                        f"Decision verified by threat rules as {action.decision} with evidence sufficiency {suff:.2f}. "
+                        f"rule_score={rule_result.score}, confidence={rule_result.confidence}."
+                    )
                 else:
+                    self._apply_validation_metrics(action.decision or "", rule_result, passed=False)
                     reward = -0.4
                     self._state.episode_metrics.mistakes_made += 1
                     self._state.mistake_made = True
                     self._state.score = 0.01
-                    message = f"Incorrect decision: {action.decision}. Expected: {expected}."
+                    message = (
+                        f"Threat-rule mismatch. Predicted={action.decision}, recommended={expected}, "
+                        f"rule_score={rule_result.score}."
+                    )
             else:
                 self._state.episode_metrics.invalid_actions += 1
                 reward = -0.05

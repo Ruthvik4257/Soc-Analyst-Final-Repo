@@ -43,6 +43,13 @@ class EpisodeMetrics(State):
     per_agent_rewards: Dict[AgentRole, float] = Field(
         default_factory=lambda: {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
     )
+    last_validation_recommended_decision: str = ""
+    last_validation_model_decision: str = ""
+    last_validation_passed: bool = False
+    last_validation_confidence: float = 0.0
+    last_validation_severity: str = "info"
+    last_validation_score: float = 0.0
+    last_validation_factors: List[str] = Field(default_factory=list)
 
 
 class SocAction(Action):

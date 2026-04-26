@@ -195,6 +195,7 @@
                 <button class="tab" data-view="integrations" onclick="switchView('integrations')">Integrations</button>
                 <button class="tab" data-view="datasets" onclick="switchView('datasets')">Datasets</button>
                 <button class="tab" data-view="training" onclick="switchView('training')">Training</button>
+                <button class="tab" data-view="rules" onclick="switchView('rules')">Detection Rules</button>
             </div>
         </div>
 
@@ -249,6 +250,8 @@
                         </div>
                         <div style="height:8px"></div>
                         <div id="metrics-view" class="muted">No metrics yet.</div>
+                        <div style="height:8px"></div>
+                        <div id="decision-verification" class="muted">Decision verification: unavailable until take_action.</div>
                     </div>
                     <div style="height:12px"></div>
                     <div class="row">
@@ -359,6 +362,40 @@
                 <div>Per-Agent: <span id="train-agents" class="muted">supervisor=0, log_hunter=0, threat_intel=0</span></div>
                 <div>Message: <span id="train-message" class="muted">Idle</span></div>
             </div>
+            <div style="height:10px"></div>
+            <div class="panel-box">
+                <div class="row">
+                    <div><strong>Training Console (Live Stream)</strong></div>
+                    <button style="max-width:220px;" onclick="downloadTrainingLogs('txt')">Download Logs (.txt)</button>
+                    <button style="max-width:220px;" onclick="downloadTrainingLogs('jsonl')">Download Logs (.jsonl)</button>
+                    <button style="max-width:220px;" onclick="downloadTrainingLogs('csv')">Download Logs (.csv)</button>
+                </div>
+                <div id="training-console" class="muted" style="margin-top:8px; max-height:220px; overflow-y:auto;">
+                    <pre>Waiting for training logs...</pre>
+                </div>
+            </div>
+        </div>
+
+        <div id="rules" class="view glass" style="padding:16px;">
+            <h2 style="margin-top:0;">Hybrid Detection Rules</h2>
+            <p class="muted">Configure thresholds, evaluate uploaded logs, and inspect rule/anomaly findings.</p>
+            <div class="row">
+                <input id="rules-query" placeholder="Evaluate query (empty = all uploaded logs)">
+                <input id="rules-max-results" type="number" min="1" value="200" placeholder="max results">
+                <button class="btn-primary" onclick="evaluateRules()">Evaluate Uploaded Logs</button>
+            </div>
+            <div class="row" style="margin-top:8px;">
+                <input id="cfg-auth-fail-threshold" type="number" min="1" value="5" placeholder="Auth failures in 60s">
+                <input id="cfg-network-portscan" type="number" min="1" value="15" placeholder="Unique ports for port scan">
+                <input id="cfg-web-404" type="number" min="1" value="12" placeholder="404 spike threshold">
+                <button onclick="saveRulesConfig()">Save Rule Config</button>
+            </div>
+            <div class="panel-box" style="margin-top:8px;">
+                <div>Rules Runtime: <span id="rules-runtime" class="muted">Idle</span></div>
+                <div>Last Recommendation: <span id="rules-recommendation">-</span> | Severity: <span id="rules-severity">-</span> | Confidence: <span id="rules-confidence">-</span></div>
+                <div>Top Factors: <span id="rules-factors" class="muted">-</span></div>
+            </div>
+            <div class="panel-box" id="rules-findings" style="margin-top:8px; max-height:280px; overflow-y:auto;"><em class="muted">Rule findings appear here.</em></div>
         </div>
     </div>
 
@@ -366,8 +403,12 @@
         let currentActionMode = "search_logs";
         let currentEpisodeId = "";
         let trainingPoller = null;
+        let trainingLogsPoller = null;
+        let trainingLogsEventSource = null;
+        let trainingLogsOffset = 0;
         let currentRunMode = "single_agent";
         let cachedTrainingPresets = {};
+        let rulesPoller = null;
 
         function switchView(viewName) {
             document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
@@ -411,8 +452,13 @@
                 const m = obs.episode_metrics;
                 document.getElementById("metrics-view").innerText =
                     `coordination=${Number(m.coordination_efficiency || 0).toFixed(2)}, evidence=${Number(m.evidence_sufficiency || 0).toFixed(2)}, campaign=${Number(m.campaign_progress || 0).toFixed(2)}, recovery=${Number(m.recovery_after_mistake || 0).toFixed(2)}, memory=${Number(m.memory_consistency_score || 0).toFixed(2)}`;
+                const verdict = m.last_validation_passed ? "PASS" : "PENDING/FAIL";
+                const factors = (m.last_validation_factors || []).slice(0, 3).join(" | ") || "No validation factors yet.";
+                document.getElementById("decision-verification").innerText =
+                    `Decision verification: ${verdict}; model=${m.last_validation_model_decision || "-"}; recommended=${m.last_validation_recommended_decision || "-"}; severity=${m.last_validation_severity || "info"}; confidence=${Number(m.last_validation_confidence || 0).toFixed(2)}; factors=${factors}`;
             } else {
                 document.getElementById("metrics-view").innerText = "No metrics yet.";
+                document.getElementById("decision-verification").innerText = "Decision verification: unavailable until take_action.";
             }
         }
 
@@ -595,9 +641,17 @@
                     negotiation_rounds
                 })
             });
+            trainingLogsOffset = 0;
+            document.getElementById("training-console").innerHTML = "<pre>Training started. Waiting for logs...</pre>";
             if (trainingPoller) clearInterval(trainingPoller);
             trainingPoller = setInterval(pollTrainingStatus, 1500);
+            startTrainingLogsStream();
+            if (trainingLogsPoller) clearInterval(trainingLogsPoller);
+            if (!trainingLogsEventSource) {
+                trainingLogsPoller = setInterval(pollTrainingLogs, 1200);
+            }
             await pollTrainingStatus();
+            await pollTrainingLogs();
         }
 
         async function loadTrainingPresets() {
@@ -644,10 +698,184 @@
                 clearInterval(trainingPoller);
                 trainingPoller = null;
             }
+            if (!status.running && trainingLogsPoller) {
+                await pollTrainingLogs();
+                clearInterval(trainingLogsPoller);
+                trainingLogsPoller = null;
+            }
+            if (!status.running && trainingLogsEventSource) {
+                trainingLogsEventSource.close();
+                trainingLogsEventSource = null;
+            }
+        }
+
+        function formatTrainingLogLine(log) {
+            const dt = new Date(Number(log.ts_ms || Date.now()));
+            const hh = String(dt.getHours()).padStart(2, "0");
+            const mm = String(dt.getMinutes()).padStart(2, "0");
+            const ss = String(dt.getSeconds()).padStart(2, "0");
+            const payload = log.payload && Object.keys(log.payload).length > 0 ? ` | ${JSON.stringify(log.payload)}` : "";
+            return `[${hh}:${mm}:${ss}] [${String(log.level || "info").toUpperCase()}] ${log.message}${payload}`;
+        }
+
+        async function pollTrainingLogs() {
+            const response = await fetch(`/api/train/logs?offset=${trainingLogsOffset}&limit=200`);
+            const data = await response.json();
+            if (!data.ok) return;
+            const logs = data.logs || [];
+            if (logs.length === 0) return;
+            appendTrainingLogEntries(logs);
+        }
+
+        function appendTrainingLogEntries(logs) {
+            if (!logs || logs.length === 0) return;
+            const container = document.getElementById("training-console");
+            const existing = container.querySelector("pre");
+            const priorText = existing ? existing.innerText : "";
+            const incoming = logs.map(formatTrainingLogLine).join("\n");
+            const combined = priorText && priorText !== "Waiting for training logs..."
+                ? `${priorText}\n${incoming}`
+                : incoming;
+            container.innerHTML = `<pre>${combined}</pre>`;
+            container.scrollTop = container.scrollHeight;
+            const last = logs[logs.length - 1];
+            if (last && typeof last.idx === "number") {
+                trainingLogsOffset = Math.max(trainingLogsOffset, Number(last.idx) + 1);
+            } else {
+                trainingLogsOffset += logs.length;
+            }
+        }
+
+        function startTrainingLogsStream() {
+            if (trainingLogsEventSource) {
+                trainingLogsEventSource.close();
+                trainingLogsEventSource = null;
+            }
+            try {
+                const streamUrl = `/api/train/logs/stream?offset=${trainingLogsOffset}`;
+                trainingLogsEventSource = new EventSource(streamUrl);
+                trainingLogsEventSource.addEventListener("log", (event) => {
+                    try {
+                        const log = JSON.parse(event.data);
+                        appendTrainingLogEntries([log]);
+                    } catch (_) {}
+                });
+                trainingLogsEventSource.addEventListener("done", async () => {
+                    if (trainingLogsEventSource) {
+                        trainingLogsEventSource.close();
+                        trainingLogsEventSource = null;
+                    }
+                    await pollTrainingLogs();
+                });
+                trainingLogsEventSource.onerror = () => {
+                    if (trainingLogsEventSource) {
+                        trainingLogsEventSource.close();
+                        trainingLogsEventSource = null;
+                    }
+                    if (!trainingLogsPoller) {
+                        trainingLogsPoller = setInterval(pollTrainingLogs, 1200);
+                    }
+                };
+            } catch (_) {
+                if (!trainingLogsPoller) {
+                    trainingLogsPoller = setInterval(pollTrainingLogs, 1200);
+                }
+            }
+        }
+
+        async function downloadTrainingLogs(format = "txt") {
+            const endpoint =
+                format === "jsonl"
+                    ? "/api/train/logs/download.jsonl"
+                    : format === "csv"
+                        ? "/api/train/logs/download.csv"
+                        : "/api/train/logs/download";
+            const response = await fetch(endpoint);
+            const text = await response.text();
+            const blob = new Blob([text], {type: "text/plain;charset=utf-8"});
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url;
+            const disposition = response.headers.get("content-disposition") || "";
+            const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+            anchor.download = match && match[1]
+                ? match[1]
+                : (format === "jsonl" ? "training_logs.jsonl" : format === "csv" ? "training_logs.csv" : "training_logs.txt");
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        async function loadRulesCatalog() {
+            const response = await fetch("/api/rules/catalog");
+            const data = await response.json();
+            if (!data.ok) return;
+            const cfg = data.catalog?.config || {};
+            if (cfg.auth_failed_login_threshold_60s !== undefined) {
+                document.getElementById("cfg-auth-fail-threshold").value = cfg.auth_failed_login_threshold_60s;
+            }
+            if (cfg.network_port_scan_unique_ports !== undefined) {
+                document.getElementById("cfg-network-portscan").value = cfg.network_port_scan_unique_ports;
+            }
+            if (cfg.web_404_threshold !== undefined) {
+                document.getElementById("cfg-web-404").value = cfg.web_404_threshold;
+            }
+        }
+
+        async function pollRulesStatus() {
+            const response = await fetch("/api/rules/status");
+            const data = await response.json();
+            if (!data.ok) return;
+            const s = data.status || {};
+            document.getElementById("rules-runtime").innerText =
+                `evaluations=${s.evaluations || 0}, high_severity=${s.high_severity || 0}, last_score=${Number(s.last_score || 0).toFixed(2)}`;
+        }
+
+        async function saveRulesConfig() {
+            const payload = {
+                auth_failed_login_threshold_60s: Number(document.getElementById("cfg-auth-fail-threshold").value || 5),
+                network_port_scan_unique_ports: Number(document.getElementById("cfg-network-portscan").value || 15),
+                web_404_threshold: Number(document.getElementById("cfg-web-404").value || 12),
+            };
+            await fetch("/api/rules/config", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(payload),
+            });
+            await pollRulesStatus();
+        }
+
+        async function evaluateRules() {
+            const query = document.getElementById("rules-query").value.trim();
+            const max_results = Number(document.getElementById("rules-max-results").value || 200);
+            const response = await fetch("/api/rules/evaluate", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({query, max_results}),
+            });
+            const data = await response.json();
+            if (!data.ok) return;
+            document.getElementById("rules-recommendation").innerText = data.recommended_decision || "-";
+            document.getElementById("rules-severity").innerText = data.severity || "-";
+            document.getElementById("rules-confidence").innerText = Number(data.confidence || 0).toFixed(2);
+            document.getElementById("rules-factors").innerText = (data.factors || []).slice(0, 3).join(" | ") || "-";
+            const hits = data.rule_hits || [];
+            const anomalies = data.anomaly_signals || [];
+            const lines = []
+                .concat(hits.slice(0, 12).map(h => `[rule][${h.category}] ${h.rule} (${Number(h.score || 0).toFixed(2)}): ${h.detail}`))
+                .concat(anomalies.slice(0, 6).map(a => `[anomaly] ${a.signal} (${Number(a.score || 0).toFixed(2)}): ${a.detail}`));
+            document.getElementById("rules-findings").innerHTML = lines.length
+                ? `<pre>${lines.join("\n")}</pre>`
+                : "<em class='muted'>No rule hits for selected data.</em>";
+            await pollRulesStatus();
         }
 
         refreshDatasetSummary();
         loadTrainingPresets();
+        loadRulesCatalog();
+        pollRulesStatus();
+        if (!rulesPoller) rulesPoller = setInterval(pollRulesStatus, 3000);
     </script>
 </body>
 </html>

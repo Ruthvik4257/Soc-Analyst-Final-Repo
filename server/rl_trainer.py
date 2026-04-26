@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -49,6 +50,7 @@ class TrainingStatus:
     per_role_last_rewards: Dict[str, float] = None  # type: ignore[assignment]
     report_path: str = ""
     training_history: List[Dict[str, Any]] = None  # type: ignore[assignment]
+    training_logs: List[Dict[str, Any]] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.per_agent_rewards is None:
@@ -59,9 +61,31 @@ class TrainingStatus:
             self.per_role_last_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
         if self.training_history is None:
             self.training_history = []
+        if self.training_logs is None:
+            self.training_logs = []
 
 
 TRAINING_STATUS = TrainingStatus()
+
+
+def append_training_log(message: str, level: str = "info", payload: Optional[Dict[str, Any]] = None) -> None:
+    entry = {
+        "idx": len(TRAINING_STATUS.training_logs),
+        "ts_ms": int(time.time() * 1000),
+        "level": level,
+        "message": message,
+        "payload": payload or {},
+    }
+    TRAINING_STATUS.training_logs.append(entry)
+    # Keep bounded memory for stable UI polling.
+    if len(TRAINING_STATUS.training_logs) > 1500:
+        TRAINING_STATUS.training_logs = TRAINING_STATUS.training_logs[-1000:]
+
+
+def get_training_logs(offset: int = 0, limit: int = 200) -> List[Dict[str, Any]]:
+    off = max(0, int(offset))
+    lim = max(1, min(1000, int(limit)))
+    return TRAINING_STATUS.training_logs[off : off + lim]
 
 
 def _build_loghunter_prompt(alert_details: Dict[str, Any]) -> str:
@@ -423,6 +447,12 @@ def run_training_loop(
     TRAINING_STATUS.delayed_reward_success_rate = 0.0
     TRAINING_STATUS.campaign_progress = 0.0
     TRAINING_STATUS.training_history = []
+    TRAINING_STATUS.training_logs = []
+    append_training_log(
+        f"Training initialized | mode={training_mode} episodes={episodes} model={resolved_model_name}",
+        payload={"seed": seed, "learning_rate": resolved_learning_rate},
+    )
+    append_training_log("Loading tokenizer and model artifacts...", payload={"backend": TRL_BACKEND})
 
     tokenizer = AutoTokenizer.from_pretrained(resolved_model_name)
     if tokenizer.pad_token is None:
@@ -444,6 +474,10 @@ def run_training_loop(
             tokenizer=tokenizer,
             device=device,
         )
+    append_training_log(
+        "Trainer ready. Starting episode loop.",
+        payload={"device": device, "policy_mode": TRAINING_STATUS.policy_mode},
+    )
 
     difficulties = ["easy", "medium", "hard"]
 
@@ -485,6 +519,16 @@ def run_training_loop(
             TRAINING_STATUS.completed_episodes = ep + 1
             TRAINING_STATUS.last_reward = reward_value
             TRAINING_STATUS.last_message = f"Episode {ep + 1}/{episodes} complete in {training_mode} mode."
+            append_training_log(
+                f"Episode {ep + 1}/{episodes} completed",
+                payload={
+                    "mode": training_mode,
+                    "difficulty": selected_difficulty,
+                    "reward": round(float(reward_value), 4),
+                    "coordination_efficiency": round(float(episode_metrics.get("coordination_efficiency", 0.0)), 4),
+                    "evidence_sufficiency": round(float(episode_metrics.get("evidence_sufficiency", 0.0)), 4),
+                },
+            )
             if "per_role_last_rewards" in episode_metrics:
                 TRAINING_STATUS.per_role_last_rewards = episode_metrics["per_role_last_rewards"]
 
@@ -521,6 +565,13 @@ def run_training_loop(
         TRAINING_STATUS.per_agent_rewards = {
             agent: round(total / denom, 4) for agent, total in aggregate_per_agent.items()
         }
+        append_training_log(
+            "Aggregating final metrics",
+            payload={
+                "avg_coordination": TRAINING_STATUS.coordination_efficiency,
+                "avg_evidence": TRAINING_STATUS.evidence_sufficiency,
+            },
+        )
         TRAINING_STATUS.coordination_efficiency = round(aggregate_coordination / denom, 4)
         TRAINING_STATUS.evidence_sufficiency = round(aggregate_evidence / denom, 4)
         TRAINING_STATUS.recovery_after_mistake = round(aggregate_recovery / denom, 4)
@@ -573,14 +624,30 @@ def run_training_loop(
                 trainer_model.push_to_hub(repo_id)
                 tokenizer.push_to_hub(repo_id)
                 TRAINING_STATUS.last_message = f"Training complete. Model and report pushed to {repo_id}."
+                append_training_log(
+                    "Training complete and pushed to hub",
+                    level="success",
+                    payload={"repo_id": repo_id, "report_path": str(report_path)},
+                )
             else:
                 TRAINING_STATUS.last_message = (
                     "Training complete. Set HF_TOKEN and HF_REPO_ID to enable push-to-hub."
                 )
+                append_training_log(
+                    "Training complete. Push skipped because HF_TOKEN/HF_REPO_ID missing.",
+                    level="warning",
+                    payload={"report_path": str(report_path)},
+                )
         else:
             TRAINING_STATUS.last_message = f"Training complete. Model and report saved to {output_dir}."
+            append_training_log(
+                "Training complete. Model saved locally.",
+                level="success",
+                payload={"output_dir": str(output_dir), "report_path": str(report_path)},
+            )
 
     except Exception as exc:  # pragma: no cover - runtime errors reported to UI
         TRAINING_STATUS.last_message = f"Training failed: {exc}"
+        append_training_log("Training failed", level="error", payload={"error": str(exc)})
     finally:
         TRAINING_STATUS.running = False

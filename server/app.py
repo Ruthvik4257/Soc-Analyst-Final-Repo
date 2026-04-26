@@ -1,5 +1,10 @@
 import sys
 import os
+import asyncio
+import csv
+import json
+import io
+from datetime import datetime
 from typing import Dict
 
 # Add both parent directory and server directory to path
@@ -8,7 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from openenv.core.env_server import create_fastapi_app
 from fastapi import BackgroundTasks, File, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from environment import SocAnalystEnvironment
 from models import SocAction, SocObservation
 from server.datasets import (
@@ -18,9 +23,10 @@ from server.datasets import (
     uploaded_logs_summary,
 )
 from server.integrations import SplunkClient, SplunkConfig, set_splunk_client
+from server.threat_rules import rules_catalog, rules_status, update_rule_config, validate_decision
 
 try:
-    from server.rl_trainer import TRAINING_STATUS, run_training_loop
+    from server.rl_trainer import TRAINING_STATUS, get_training_logs, run_training_loop
     _trainer_import_error = ""
 except Exception as exc:  # pragma: no cover - keeps API bootable when RL stack is unavailable
     _trainer_import_error = str(exc)
@@ -46,11 +52,15 @@ except Exception as exc:  # pragma: no cover - keeps API bootable when RL stack 
         per_role_last_rewards = {"supervisor": 0.0, "log_hunter": 0.0, "threat_intel": 0.0}
         report_path = ""
         training_history = []
+        training_logs = []
 
     TRAINING_STATUS = _FallbackStatus()
 
     def run_training_loop(*_args, **_kwargs):
         raise RuntimeError(f"RL trainer import failed: {_trainer_import_error}")
+
+    def get_training_logs(*_args, **_kwargs):
+        return []
 
 app = create_fastapi_app(SocAnalystEnvironment, SocAction, SocObservation)
 MULTI_AGENT_SESSIONS: Dict[str, SocAnalystEnvironment] = {}
@@ -131,6 +141,45 @@ def search_logs(query: str = "", max_results: int = 20):
 @app.get("/api/datasets/logs/summary")
 def logs_summary():
     return {"ok": True, "summary": uploaded_logs_summary()}
+
+
+@app.get("/api/rules/catalog")
+def get_rules_catalog():
+    return {"ok": True, "catalog": rules_catalog()}
+
+
+@app.get("/api/rules/status")
+def get_rules_status():
+    return {"ok": True, "status": rules_status()}
+
+
+@app.post("/api/rules/config")
+def set_rules_config(payload: dict):
+    updated = update_rule_config(payload or {})
+    return {"ok": True, "config": updated}
+
+
+@app.post("/api/rules/evaluate")
+def evaluate_rules(payload: dict):
+    payload = payload or {}
+    query = (payload.get("query") or "").strip()
+    max_results = int(payload.get("max_results", 200))
+    alert = payload.get("alert") or {"type": "uploaded_dataset_evaluation"}
+    logs = search_uploaded_logs(query, max_results=max_results)
+    result = validate_decision(alert, logs)
+    return {
+        "ok": True,
+        "query": query,
+        "count": len(logs),
+        "recommended_decision": result.recommended_decision,
+        "severity": result.severity,
+        "score": result.score,
+        "confidence": result.confidence,
+        "factors": result.factors,
+        "rule_hits": result.rule_hits,
+        "anomaly_signals": result.anomaly_signals,
+        "ioc_hits": result.ioc_hits,
+    }
 
 
 @app.get("/healthz")
@@ -237,6 +286,93 @@ def training_status():
         "per_role_last_rewards": TRAINING_STATUS.per_role_last_rewards,
         "report_path": TRAINING_STATUS.report_path,
     }
+
+
+@app.get("/api/train/logs")
+def training_logs(offset: int = 0, limit: int = 200):
+    logs = get_training_logs(offset=offset, limit=limit)
+    return {
+        "ok": True,
+        "count": len(logs),
+        "offset": max(0, int(offset)),
+        "next_offset": max(0, int(offset)) + len(logs),
+        "logs": logs,
+    }
+
+
+@app.get("/api/train/logs/download")
+def download_training_logs():
+    rows = getattr(TRAINING_STATUS, "training_logs", []) or []
+    lines = []
+    for entry in rows:
+        ts_ms = int(entry.get("ts_ms", 0))
+        level = str(entry.get("level", "info")).upper()
+        message = str(entry.get("message", ""))
+        payload = entry.get("payload") or {}
+        payload_suffix = f" | {json.dumps(payload, ensure_ascii=True)}" if payload else ""
+        lines.append(f"{ts_ms} [{level}] {message}{payload_suffix}")
+    text = "\n".join(lines) if lines else "No training logs available.\n"
+    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    headers = {"Content-Disposition": f'attachment; filename="training_logs_{stamp}.txt"'}
+    return PlainTextResponse(text, headers=headers)
+
+
+@app.get("/api/train/logs/download.jsonl")
+def download_training_logs_jsonl():
+    rows = getattr(TRAINING_STATUS, "training_logs", []) or []
+    if rows:
+        content = "\n".join(json.dumps(row, ensure_ascii=True) for row in rows) + "\n"
+    else:
+        content = json.dumps({"message": "No training logs available."}, ensure_ascii=True) + "\n"
+    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    headers = {"Content-Disposition": f'attachment; filename="training_logs_{stamp}.jsonl"'}
+    return PlainTextResponse(content, headers=headers, media_type="application/x-ndjson")
+
+
+@app.get("/api/train/logs/download.csv")
+def download_training_logs_csv():
+    rows = getattr(TRAINING_STATUS, "training_logs", []) or []
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ts_ms", "level", "message", "payload_json"])
+    for entry in rows:
+        ts_ms = int(entry.get("ts_ms", 0))
+        level = str(entry.get("level", "info"))
+        message = str(entry.get("message", ""))
+        payload = json.dumps(entry.get("payload") or {}, ensure_ascii=True)
+        writer.writerow([ts_ms, level, message, payload])
+    if not rows:
+        writer.writerow([0, "info", "No training logs available.", "{}"])
+    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    headers = {"Content-Disposition": f'attachment; filename="training_logs_{stamp}.csv"'}
+    return PlainTextResponse(output.getvalue(), headers=headers, media_type="text/csv")
+
+
+@app.get("/api/train/logs/stream")
+async def training_logs_stream(offset: int = 0):
+    async def event_generator():
+        cursor = max(0, int(offset))
+        idle_heartbeats = 0
+        while True:
+            logs = get_training_logs(offset=cursor, limit=200)
+            if logs:
+                for entry in logs:
+                    payload = json.dumps(entry, ensure_ascii=True)
+                    yield f"event: log\ndata: {payload}\n\n"
+                cursor += len(logs)
+                idle_heartbeats = 0
+                continue
+
+            # Keep connection warm; stop once training is not running and no new logs.
+            if not TRAINING_STATUS.running:
+                yield "event: done\ndata: {}\n\n"
+                break
+            idle_heartbeats += 1
+            if idle_heartbeats % 5 == 0:
+                yield "event: heartbeat\ndata: {}\n\n"
+            await asyncio.sleep(0.8)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/api/eval/report")
