@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SOC Analyst — Console</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #131a22;
+      --panel-2: #1a2330;
+      --border: #2a3544;
+      --text: #e8eef4;
+      --muted: #8b9aad;
+      --accent: #3d8fd1;
+      --accent-dim: #2a6a9a;
+      --ok: #34d399;
+      --err: #f87171;
+      --font: "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    a { color: var(--accent); }
+    header {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; letter-spacing: 0.04em; }
+    header .links { display: flex; gap: 1rem; font-size: 0.9rem; }
+    .layout { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; min-height: calc(100vh - 52px); }
+    @media (max-width: 800px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    aside {
+      border-right: 1px solid var(--border);
+      padding: 1rem;
+      background: var(--panel-2);
+      font-size: 0.88rem;
+    }
+    aside label { display: block; margin-bottom: 0.25rem; color: var(--muted); }
+    aside input[type="text"] {
+      width: 100%;
+      margin-bottom: 0.75rem;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #0c1016;
+      color: var(--text);
+    }
+    aside .pill {
+      display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px;
+      font-size: 0.75rem; margin-top: 0.4rem;
+    }
+    .pill.ok { background: #064e3b; color: #a7f3d0; }
+    .pill.bad { background: #450a0a; color: #fecaca; }
+    main { padding: 1rem 1.25rem 2rem; max-width: 1200px; }
+    .tabs {
+      display: flex; flex-wrap: wrap; gap: 0.35rem;
+      margin-bottom: 1rem;
+    }
+    .tabs button {
+      font: inherit; cursor: pointer;
+      padding: 0.5rem 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--muted);
+    }
+    .tabs button:hover { color: var(--text); border-color: var(--accent-dim); }
+    .tabs button.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+    .card h2 { margin: 0 0 0.75rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+    .row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; }
+    .field { display: flex; flex-direction: column; gap: 0.2rem; }
+    .field label { font-size: 0.8rem; color: var(--muted); }
+    input, select, textarea {
+      font: inherit; padding: 0.4rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 4px; background: #0c1016; color: var(--text);
+    }
+    button.primary {
+      font: inherit; cursor: pointer; padding: 0.45rem 0.9rem;
+      background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    }
+    button.primary:hover { filter: brightness(1.08); }
+    button.secondary {
+      font: inherit; cursor: pointer; padding: 0.45rem 0.8rem;
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+    }
+    pre.log {
+      font-size: 0.8rem; white-space: pre-wrap; word-break: break-word;
+      max-height: 320px; overflow: auto;
+      background: #0c1016; border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.75rem; margin: 0;
+    }
+    .msg { font-size: 0.9rem; margin: 0.4rem 0; padding: 0.5rem; border-radius: 4px; background: #0c1016; border-left: 3px solid var(--accent); }
+    .msg.error { border-left-color: var(--err); color: #fecaca; }
+    .msg.ok { border-left-color: var(--ok); color: #a7f3d0; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .episode-id { font-family: ui-monospace, monospace; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SOC Analyst · Incident console</h1>
+    <nav class="links">
+      <a href="/docs" target="_blank" rel="noopener">API docs</a>
+      <a href="/healthz" target="_blank" rel="noopener">healthz</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside>
+      <label for="apiBase">API base (leave empty if this page is served by the API)</label>
+      <input id="apiBase" type="text" placeholder="e.g. http://127.0.0.1:8000" autocomplete="off" />
+      <button type="button" class="secondary" id="btnHealth" style="width:100%;">Check /healthz</button>
+      <div id="healthOut"></div>
+    </aside>
+
+    <main>
+      <div class="tabs" role="tablist">
+        <button type="button" class="active" data-panel="terminal" role="tab" aria-selected="true">Terminal</button>
+        <button type="button" data-panel="integrations" role="tab" aria-selected="false">Integrations</button>
+        <button type="button" data-panel="datasets" role="tab" aria-selected="false">Datasets</button>
+        <button type="button" data-panel="training" role="tab" aria-selected="false">Training</button>
+      </div>
+
+      <section id="panel-terminal" class="panel active" role="tabpanel">
+        <div class="card">
+          <h2>Session</h2>
+          <div class="row">
+            <div class="field">
+              <label for="difficulty">Difficulty</label>
+              <select id="difficulty">
+                <option value="easy">easy</option>
+                <option value="medium">medium</option>
+                <option value="hard">hard</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="mode">Mode</label>
+              <select id="mode">
+                <option value="multi_agent">multi_agent</option>
+                <option value="campaign">campaign</option>
+                <option value="single_agent">single_agent</option>
+              </select>
+            </div>
+            <button type="button" class="primary" id="btnReset">Reset episode</button>
+          </div>
+          <p class="episode-id">Episode: <span id="episodeId">—</span></p>
+        </div>
+        <div class="card">
+          <h2>Quick actions (supervisor)</h2>
+          <div class="btn-row">
+            <button type="button" class="secondary" data-decision="false_positive" disabled>False positive</button>
+            <button type="button" class="secondary" data-decision="escalate_tier2" disabled>Escalate Tier 2</button>
+            <button type="button" class="primary" data-decision="block_if_malicious" disabled>Block malicious</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Timeline (transcript)</h2>
+          <pre class="log" id="transcript">Run Reset episode to begin.</pre>
+        </div>
+        <div class="card">
+          <h2>Activity / API</h2>
+          <pre class="log" id="actLog" style="max-height:160px;"></pre>
+        </div>
+      </section>
+
+      <section id="panel-integrations" class="panel" role="tabpanel" hidden>
+        <div class="card">
+          <h2>Splunk</h2>
+          <div class="row" style="margin-bottom:0.5rem">
+            <div class="field"><label>Host</label><input id="spHost" value="127.0.0.1" /></div>
+            <div class="field"><label>Port</label><input id="spPort" type="number" value="8089" min="1" max="65535" /></div>
+            <div class="field"><label>Username</label><input id="spUser" value="admin" /></div>
+            <div class="field"><label>Password</label><input id="spPass" type="password" value="" /></div>
+            <div class="field">
+              <label>Scheme</label>
+              <select id="spScheme"><option>https</option><option>http</option></select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="secondary" id="btnSpTest">Test connection</button>
+            <button type="button" class="primary" id="btnSpSave">Save configuration</button>
+          </div>
+          <div id="spMsg"></div>
+        </div>
+      </section>
+
+      <section id="panel-datasets" class="panel" role="tabpanel" hidden>
+        <div class="card">
+          <h2>Upload logs</h2>
+          <input type="file" id="fileLogs" accept=".log,.txt,.csv,.json,.jsonl" />
+          <div style="margin-top:0.5rem">
+            <button type="button" class="primary" id="btnUpload">Upload</button>
+          </div>
+          <div id="upMsg"></div>
+        </div>
+        <div class="card">
+          <h2>Search in uploaded logs</h2>
+          <div class="row">
+            <div class="field" style="flex:1;min-width:200px">
+              <label for="qLogs">Query / filter</label>
+              <input id="qLogs" type="search" placeholder="(optional)" />
+            </div>
+            <button type="button" class="primary" id="btnSearch">Search</button>
+          </div>
+          <pre class="log" id="searchOut" style="max-height:400px">No results yet.</pre>
+        </div>
+      </section>
+
+      <section id="panel-training" class="panel" role="tabpanel" hidden>
+        <div class="card">
+          <h2>Presets &amp; start</h2>
+          <div class="row">
+            <div class="field">
+              <label for="presetSel">Preset</label>
+              <select id="presetSel"></select>
+            </div>
+            <button type="button" class="secondary" id="btnPresets">Refresh presets</button>
+            <button type="button" class="primary" id="btnTrainStart">Start training</button>
+          </div>
+          <p style="color:var(--muted); font-size:0.85rem">Request body (from preset):</p>
+          <pre class="log" id="presetBody" style="max-height:200px">{}</pre>
+          <div id="trainMsg"></div>
+        </div>
+        <div class="card">
+          <h2>Training status</h2>
+          <pre class="log" id="trainStatus" style="max-height:200px">—</pre>
+        </div>
+        <div class="card">
+          <h2>Last eval report (history)</h2>
+          <pre class="log" id="trainReport" style="max-height:240px">—</pre>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      const el = (id) => document.getElementById(id);
+      const logAct = (line) => {
+        const a = el("actLog");
+        a.textContent = (a.textContent + "\n" + line).split("\n").slice(-100).join("\n");
+      };
+
+      function baseUrl() {
+        return (el("apiBase").value || "").trim().replace(/\/+$/, "");
+      }
+      function apiCall(path) {
+        const b = baseUrl();
+        if (b) return b + path;
+        return path;
+      }
+
+      async function jsonFetch(path, options) {
+        const url = apiCall(path);
+        const r = await fetch(url, options);
+        const text = await r.text();
+        let data;
+        try { data = text ? JSON.parse(text) : null; } catch { data = { _raw: text }; }
+        if (!r.ok) {
+          const err = new Error(data && data.message || text || "HTTP " + r.status);
+          err.status = r.status; err.data = data; throw err;
+        }
+        return data;
+      }
+
+      let episodeId = null;
+      let statusTimer = null;
+      const presets = {};
+
+      function setTabButtons() {
+        document.querySelectorAll(".tabs button").forEach((btn) => {
+          const id = "panel-" + btn.dataset.panel;
+          const p = document.getElementById(id);
+          const on = btn.classList.contains("active");
+          if (p) { p.classList.toggle("active", on); p.hidden = !on; }
+          btn.setAttribute("aria-selected", on);
+        });
+      }
+      document.querySelectorAll(".tabs button").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          setTabButtons();
+        });
+      });
+      setTabButtons();
+
+      function setQuick(disable) {
+        document.querySelectorAll("[data-decision]").forEach((b) => {
+          b.disabled = disable || !episodeId;
+        });
+      }
+
+      el("btnReset").addEventListener("click", async () => {
+        try {
+          const body = {
+            difficulty: el("difficulty").value,
+            mode: el("mode").value,
+          };
+          const d = await jsonFetch("/api/multi/reset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          episodeId = d.episode_id;
+          el("episodeId").textContent = episodeId || "—";
+          setQuick(false);
+          const obs = d.observation || {};
+          el("transcript").textContent = JSON.stringify(obs.transcript || [], null, 2);
+          logAct("reset ok " + episodeId);
+        } catch (e) {
+          logAct("reset error: " + e.message);
+          el("transcript").textContent = e.message;
+        }
+      });
+
+      function stepWithDecision(decision) {
+        if (!episodeId) return;
+        const body = {
+          episode_id: episodeId,
+          action: {
+            action_type: "take_action",
+            decision: decision,
+            agent_role: "supervisor",
+            reason: "Analyst (web UI)",
+            confidence: 0.75,
+          },
+        };
+        return jsonFetch("/api/multi/step", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      }
+      document.querySelectorAll("[data-decision]").forEach((b) => {
+        b.addEventListener("click", async () => {
+          const dec = b.getAttribute("data-decision");
+          try {
+            const d = await stepWithDecision(dec);
+            const obs = (d && d.observation) || {};
+            el("transcript").textContent = JSON.stringify(obs.transcript || [], null, 2);
+            logAct("step " + dec + " reward=" + (d && d.reward));
+          } catch (e) {
+            if (e.status === 400 && e.data && e.data.error_code === "INVALID_EPISODE") {
+              episodeId = null;
+              el("episodeId").textContent = "—";
+              setQuick(true);
+            }
+            logAct("step error: " + e.message);
+            el("transcript").textContent = e.data ? JSON.stringify(e.data, null, 2) : e.message;
+          }
+        });
+      });
+      setQuick(true);
+
+      function splunkBody() {
+        return {
+          host: el("spHost").value.trim() || "127.0.0.1",
+          port: parseInt(el("spPort").value, 10) || 8089,
+          username: el("spUser").value,
+          password: el("spPass").value,
+          scheme: el("spScheme").value,
+        };
+      }
+      el("btnSpTest").addEventListener("click", async () => {
+        const m = el("spMsg");
+        m.innerHTML = "";
+        try {
+          const d = await jsonFetch("/api/integrations/splunk/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(splunkBody()),
+          });
+          m.innerHTML = '<p class="msg ' + (d.ok ? "ok" : "error") + '">' + (d.message || JSON.stringify(d)) + "</p>";
+        } catch (e) {
+          m.innerHTML = '<p class="msg error">' + (e.data && e.data.message || e.message) + "</p>";
+        }
+      });
+      el("btnSpSave").addEventListener("click", async () => {
+        const m = el("spMsg");
+        m.innerHTML = "";
+        try {
+          const d = await jsonFetch("/api/integrations/splunk", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(splunkBody()),
+          });
+          m.innerHTML = '<p class="msg ' + (d.ok ? "ok" : "error") + '">' + (d.message || JSON.stringify(d)) + "</p>";
+        } catch (e) {
+          m.innerHTML = '<p class="msg error">' + (e.data && e.data.message || e.message) + "</p>";
+        }
+      });
+
+      el("btnUpload").addEventListener("click", async () => {
+        const f = el("fileLogs").files[0];
+        const m = el("upMsg");
+        m.innerHTML = "";
+        if (!f) { m.innerHTML = '<p class="msg error">Choose a file first.</p>'; return; }
+        const fd = new FormData();
+        fd.append("file", f);
+        try {
+          const url = apiCall("/api/datasets/logs/upload");
+          const r = await fetch(url, { method: "POST", body: fd });
+          const text = await r.text();
+          const d = text ? JSON.parse(text) : {};
+          m.innerHTML = '<p class="msg ' + (r.ok && d.ok !== false ? "ok" : "error") + '">' + (d.message || text) + "</p>";
+        } catch (e) {
+          m.innerHTML = '<p class="msg error">' + e.message + "</p>";
+        }
+      });
+      el("btnSearch").addEventListener("click", async () => {
+        const q = encodeURIComponent(el("qLogs").value || "");
+        try {
+          const d = await jsonFetch("/api/datasets/logs/search?query=" + q + "&max_results=200");
+          el("searchOut").textContent = JSON.stringify(d, null, 2);
+        } catch (e) {
+          el("searchOut").textContent = e.message;
+        }
+      });
+
+      async function loadPresets() {
+        const d = await jsonFetch("/api/train/presets");
+        const pr = (d && d.presets) || {};
+        Object.keys(presets).forEach((k) => delete presets[k]);
+        Object.assign(presets, pr);
+        const sel = el("presetSel");
+        sel.innerHTML = "";
+        const names = Object.keys(presets);
+        if (names.length === 0) {
+          const o = document.createElement("option");
+          o.value = "";
+          o.textContent = "(no presets)";
+          sel.appendChild(o);
+          el("presetBody").textContent = "{}";
+          return;
+        }
+        names.forEach((name) => {
+          const o = document.createElement("option");
+          o.value = name; o.textContent = name;
+          sel.appendChild(o);
+        });
+        updatePresetBody();
+      }
+      function updatePresetBody() {
+        const name = el("presetSel").value;
+        const body = presets[name] || {};
+        el("presetBody").textContent = JSON.stringify(body, null, 2);
+      }
+      el("presetSel").addEventListener("change", updatePresetBody);
+      el("btnPresets").addEventListener("click", () => { loadPresets().catch((e) => { el("trainMsg").textContent = e.message; }); });
+      el("btnTrainStart").addEventListener("click", async () => {
+        const name = el("presetSel").value;
+        if (!name || !presets[name]) {
+          el("trainMsg").innerHTML = '<p class="msg error">Select a valid preset</p>';
+          return;
+        }
+        const body = JSON.parse(JSON.stringify(presets[name]));
+        el("trainMsg").innerHTML = "";
+        try {
+          const d = await jsonFetch("/api/train", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          el("trainMsg").innerHTML = '<p class="msg ok">' + (d.message || "Started") + "</p>";
+          startStatusPoll();
+        } catch (e) {
+          el("trainMsg").innerHTML = '<p class="msg error">' + (e.data && e.data.message || e.message) + "</p>";
+        }
+      });
+
+      function startStatusPoll() {
+        if (statusTimer) clearInterval(statusTimer);
+        const tick = async () => {
+          try {
+            const s = await jsonFetch("/api/train/status");
+            el("trainStatus").textContent = JSON.stringify(s, null, 2);
+            if (!s.running) {
+              if (statusTimer) clearInterval(statusTimer);
+              statusTimer = null;
+            }
+            const r = await jsonFetch("/api/eval/report");
+            el("trainReport").textContent = JSON.stringify(r, null, 2);
+          } catch (e) {
+            el("trainStatus").textContent = e.message;
+          }
+        };
+        statusTimer = setInterval(tick, 2000);
+        tick();
+      }
+
+      el("btnHealth").addEventListener("click", async () => {
+        const out = el("healthOut");
+        out.innerHTML = "…";
+        try {
+          const d = await jsonFetch("/healthz");
+          const ok = d.ok !== false;
+          out.innerHTML = '<div class="pill ' + (ok ? "ok" : "bad") + '">' +
+            (ok ? "API OK" : "check failed") + '</div><pre class="log" style="margin-top:0.4rem;max-height:200px">' +
+            JSON.stringify(d, null, 2) + "</pre>";
+        } catch (e) {
+          out.innerHTML = '<div class="pill bad">Error</div><pre class="log" style="margin-top:0.4rem">' + e.message + "</pre>";
+        }
+      });
+
+      loadPresets().catch((e) => { el("presetBody").textContent = e.message; });
+    })();
+  </script>
+</body>
+</html>

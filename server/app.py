@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from openenv.core.env_server import create_fastapi_app
 from fastapi import BackgroundTasks, File, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from environment import SocAnalystEnvironment
 from models import SocAction, SocObservation
 from server.datasets import (
@@ -63,6 +64,13 @@ except Exception as exc:  # pragma: no cover - keeps API bootable when RL stack 
         return []
 
 app = create_fastapi_app(SocAnalystEnvironment, SocAction, SocObservation)
+# Allow local file:// or separate dev ports to call the API if needed
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 MULTI_AGENT_SESSIONS: Dict[str, SocAnalystEnvironment] = {}
 
 TRAINING_PRESETS = {
@@ -101,15 +109,8 @@ TRAINING_PRESETS = {
 
 @app.get("/")
 def read_root():
-    """Streamlit is the web UI; this handler is for direct access to the API process (e.g. uvicorn on :8000)."""
-    return JSONResponse(
-        {
-            "service": "soc-analyst-api",
-            "message": "This port serves the OpenEnv + SOC REST API. Use Streamlit (see README) for the web console, or open /docs.",
-            "docs": "/docs",
-            "healthz": "/healthz",
-        }
-    )
+    root_dir = os.path.dirname(os.path.dirname(__file__))
+    return FileResponse(os.path.join(root_dir, "frontend", "index.html"))
 
 
 @app.post("/api/integrations/splunk")
@@ -439,7 +440,6 @@ def eval_report():
 
 def main():
     import uvicorn
-    # Default dev port 8000 matches streamlit `SOC_API_BASE` and README local instructions.
     uvicorn.run("server.app:app", host="0.0.0.0", port=8000, reload=True)
 
 if __name__ == '__main__':

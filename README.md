@@ -33,8 +33,8 @@ The agent can query internal tools using:
 - `server/environment.py`: Single-agent, multi-agent, and campaign environment logic.
 - `server/rl_trainer.py`: PPO training loop and training report generation.
 - `server/app.py`: API routes for environment interaction, training, and metrics.
-- `streamlit_app.py`, `utils/`, `.streamlit/config.toml`: SOC dark-mode Streamlit console (primary UI in Docker Space and for local use).
-- `docker/entrypoint.sh`, `docker/nginx.conf.template`: Nginx reverse proxy so the Space serves Streamlit on `/` and FastAPI on `/api/`, `/docs`, `/healthz`, OpenEnv routes, etc.
+- `frontend/index.html`: Basic web console (HTML/CSS/JS) for Terminal, Integrations, Datasets, and Training; served at `/` by FastAPI.
+- `docker/entrypoint.sh`, `docker/nginx.conf.template`: Nginx in the Space forwards the public `PORT` to FastAPI (same process serves `/`, `/api/`, `/docs`, `/healthz`, OpenEnv routes, etc.).
 
 ## Usage
 1. Provide credentials if needed:
@@ -47,21 +47,19 @@ The agent can query internal tools using:
    python inference.py
    ```
 
-## Run the API + Streamlit on your PC (Windows)
+## Run the web console on your PC (Windows)
 
-- Double-click **`run_local.cmd`** in this folder, **or** in PowerShell: `.\run_local.ps1`  
-  That starts **FastAPI** on [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) and **Streamlit** on [http://127.0.0.1:8501](http://127.0.0.1:8501) in two separate windows. The first time, wait until Uvicorn prints “Application startup” (model imports can take a minute or two).
-- The sidebar **API base URL** should be `http://127.0.0.1:8000` (or set `SOC_API_BASE` to the same value).
+- Double-click **`run_local.cmd`**, or run **`.\run_local.ps1`**. A window opens with **Uvicorn**; open [http://127.0.0.1:8000](http://127.0.0.1:8000) for the HTML console (API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)). The first start can take 1–2 minutes while the stack loads.
+- Or: `uvicorn server.app:app --host 127.0.0.1 --port 8000` from the project root with `PYTHONPATH` set to that root.
+- If you host the static page elsewhere, set the **API base** field in the sidebar to your API’s URL (CORS is enabled for development).
 
 ## Hugging Face Space Deployment
 
 This repository is configured as a Docker Space (`sdk: docker`).
 
-The container exposes a **single public port** (`PORT`, default **7860**). **nginx** listens there and routes:
-- **`/`** → Streamlit SOC console (server-side API calls use `SOC_API_BASE=http://127.0.0.1:8000`).
-- **`/api/*`**, **`/healthz`**, **`/docs`**, **`/redoc`**, **`/openapi.json`**, OpenEnv **`/reset`**, **`/step`**, **`/state`**, **`/schema`**, **`/metadata`**, **`/health`**, **`/mcp`**, **`/ws`**, etc. → **FastAPI** (uvicorn on 127.0.0.1:8000).
+The container exposes a **single public port** (`PORT`, default **7860**). **nginx** forwards it to **FastAPI** (127.0.0.1:8000), which serves **`/`** (HTML console), **`/api/*`**, **`/healthz`**, **`/docs`**, OpenEnv routes (**`/reset`**, **`/step`**, …), **`/mcp`**, **`/ws`**, etc.
 
-Init uses **tini** so child processes are reaped. First boot can take **several minutes** on CPU while PyTorch and the app import; the entrypoint waits up to ~5 minutes for `GET /healthz` before starting nginx and Streamlit.
+Init uses **tini** so child processes are reaped. First boot can take **several minutes** on CPU while PyTorch and the app import; the entrypoint waits up to ~5 minutes for `GET /healthz` before starting nginx.
 
 ### 1) Push this repo to a Hugging Face Space
 - Create a Space.
