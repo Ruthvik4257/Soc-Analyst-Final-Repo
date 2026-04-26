@@ -10,7 +10,6 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,13 +23,9 @@ def _soc_global_css() -> None:
 <style>
   .block-container { padding-top: 0.25rem !important; max-width: 100% !important; }
   header[data-testid="stHeader"] { background: transparent; }
-  div[data-testid="stVerticalBlockBorderWrapper"] {
-    border: 1px solid rgba(59, 130, 246, 0.18) !important;
-    border-radius: 12px !important;
-    box-shadow: 0 0 24px rgba(59, 130, 246, 0.06);
-    background: linear-gradient(145deg, rgba(24, 24, 27, 0.85), rgba(9, 9, 11, 0.65)) !important;
-    backdrop-filter: blur(10px);
-  }
+  /* Lighter panel hint — avoid styling every bordered block (hurts interactivity/perf) */
+  .stButton > button { min-height: 2.5rem; }
+  [data-testid="column"] { min-width: 0 !important; }
   .metric-threat-high [data-testid="stMetricValue"] { color: #ef4444 !important; }
   .metric-threat-mid [data-testid="stMetricValue"] { color: #f97316 !important; }
   .metric-threat-low [data-testid="stMetricValue"] { color: #22c55e !important; }
@@ -90,7 +85,7 @@ def _terminal_tab(client: APIClient, sm: StateManager) -> None:
             with c_r1:
                 if st.button("Reset episode", use_container_width=True, type="secondary", key="btn_reset_ep"):
                     if sm.loading:
-                        st.warning("Busy.")
+                        st.warning("Busy — use sidebar **Clear busy** if stuck.")
                     else:
                         sm.loading = True
                         try:
@@ -102,6 +97,7 @@ def _terminal_tab(client: APIClient, sm: StateManager) -> None:
                             if obs.get("transcript"):
                                 sm.sync_transcript(obs.get("transcript", []))
                             sm.log(f"reset ok episode_id={sm.episode_id}")
+                            st.rerun()
                         except APIError as e:
                             sm.log(f"reset error: {e}")
                             st.error(str(e))
@@ -138,36 +134,39 @@ def _terminal_tab(client: APIClient, sm: StateManager) -> None:
                     key="act_bl",
                     disabled=not sm.episode_id or sm.loading,
                 )
-            for label, dec, fired in (
-                ("false_positive", "false_positive", fp),
-                ("escalate", "escalate_tier2", es),
-                ("block", "block_if_malicious", bl),
-            ):
-                if fired and sm.episode_id and not sm.loading:
-                    sm.loading = True
-                    try:
-                        r = client.multi_step(
-                            episode_id=sm.episode_id,
-                            action={
-                                "action_type": "take_action",
-                                "decision": dec,
-                                "agent_role": "supervisor",
-                                "reason": f"Analyst {label} (Streamlit UI)",
-                                "confidence": 0.75,
-                            },
-                        )
-                        obs = (r or {}).get("observation") or {}
-                        sm.last_observation = obs
-                        if obs.get("transcript"):
-                            sm.sync_transcript(obs.get("transcript", []))
-                        sm.log(f"action {label} reward={(r or {}).get('reward')}")
-                    except APIError as e:
-                        st.error(str(e))
-                        if e.error_code == "INVALID_EPISODE":
-                            sm.clear_episode()
-                        sm.log(f"action error: {e}")
-                    finally:
-                        sm.loading = False
+            def _do_quick_action(label: str, dec: str) -> None:
+                sm.loading = True
+                try:
+                    r = client.multi_step(
+                        episode_id=sm.episode_id,
+                        action={
+                            "action_type": "take_action",
+                            "decision": dec,
+                            "agent_role": "supervisor",
+                            "reason": f"Analyst {label} (Streamlit UI)",
+                            "confidence": 0.75,
+                        },
+                    )
+                    obs = (r or {}).get("observation") or {}
+                    sm.last_observation = obs
+                    if obs.get("transcript"):
+                        sm.sync_transcript(obs.get("transcript", []))
+                    sm.log(f"action {label} reward={(r or {}).get('reward')}")
+                    st.rerun()
+                except APIError as e:
+                    st.error(str(e))
+                    if e.error_code == "INVALID_EPISODE":
+                        sm.clear_episode()
+                    sm.log(f"action error: {e}")
+                finally:
+                    sm.loading = False
+
+            if fp and sm.episode_id and not sm.loading:
+                _do_quick_action("false_positive", "false_positive")
+            elif es and sm.episode_id and not sm.loading:
+                _do_quick_action("escalate", "escalate_tier2")
+            elif bl and sm.episode_id and not sm.loading:
+                _do_quick_action("block", "block_if_malicious")
 
     with mid:
         with st.container(border=True):
@@ -297,16 +296,68 @@ def _datasets_tab(client: APIClient) -> None:
             st.error(str(e))
 
 
+@st.fragment(run_every=2.0)
+def _training_status_fragment(client: APIClient) -> None:
+    """
+    Isolated 2s polling: does NOT rerun the full app, so other tabs' buttons keep working
+    (replaces st_autorefresh, which re-ran the entire script and broke widget clicks).
+    """
+    sm = StateManager()
+    if sm.training_state != "running":
+        return
+    st.caption("Live status (auto-refresh · this block only)")
+
+    try:
+        status = client.training_status()
+    except APIError as e:
+        st.error(str(e))
+        return
+
+    st.json(
+        {k: status.get(k) for k in (
+            "running", "completed_episodes", "total_episodes", "last_message", "model_name", "last_reward", "mode",
+        )}
+    )
+    if bool(status.get("running")):
+        st.session_state["saw_train_running"] = True
+    if sm.training_state == "running" and st.session_state.get("saw_train_running") and not bool(
+        status.get("running")
+    ):
+        sm.training_state = "completed"
+    st.session_state["training_poll_count"] = int(st.session_state.get("training_poll_count", 0)) + 1
+    if int(st.session_state.get("training_poll_count", 0)) >= 100 and sm.training_state == "running":
+        sm.training_state = "completed"
+
+    try:
+        rep = client.eval_report()
+    except APIError as e:
+        st.warning(f"Report: {e}")
+        rep = {}
+    history = (rep or {}).get("history") or []
+    if history:
+        chart = pd.DataFrame(
+            {
+                "episode": [h.get("episode") for h in history],
+                "reward": [h.get("reward") for h in history],
+            }
+        )
+        st.subheader("Episode rewards")
+        st.line_chart(chart.set_index("episode"))
+    else:
+        st.caption("No `history` yet in this run.")
+
+
 def _training_tab(client: APIClient, sm: StateManager) -> None:
     st.caption("Training loop status (server-side PPO / TRL). Presets are cached 5 min.")
     c1, c2, c3 = st.columns([1, 1, 1], gap="small")
     with c1:
         if st.button("Refresh presets", use_container_width=True, key="tr_refresh_presets"):
             st.cache_data.clear()
+            st.rerun()
     with c2:
         st.metric("UI training state", sm.training_state)
     with c3:
-        st.metric("Polls", sm.training_poll_count)
+        st.metric("Polls (live)", sm.training_poll_count)
 
     try:
         presets = _cached_train_presets(client.api_base).get("presets") or {}
@@ -325,50 +376,19 @@ def _training_tab(client: APIClient, sm: StateManager) -> None:
             if r.get("ok") is False:
                 st.error(r.get("message", "Failed"))
             else:
-                sm.training_state = "running"
+                st.session_state["training_state"] = "running"
                 st.session_state["saw_train_running"] = False
+                st.session_state["training_poll_count"] = 0
                 st.success(r.get("message", "Started"))
+                st.rerun()
         except APIError as e:
             st.error(str(e))
         finally:
             sm.loading = False
 
-    try:
-        status = client.training_status()
-    except APIError as e:
-        st.error(str(e))
-        status = {}
-    st.json(
-        {k: status.get(k) for k in (
-            "running", "completed_episodes", "total_episodes", "last_message", "model_name", "last_reward", "mode",
-        )}
-    )
-    if bool(status.get("running")):
-        st.session_state["saw_train_running"] = True
-    if sm.training_state == "running" and st.session_state.get("saw_train_running") and not bool(
-        status.get("running")
-    ):
-        sm.training_state = "completed"
-    if int(st.session_state.get("training_poll_count", 0)) >= 100 and sm.training_state == "running":
-        sm.training_state = "completed"
-
-    try:
-        rep = client.eval_report()
-    except APIError as e:
-        st.warning(f"Report: {e}")
-        rep = {}
-    history = rep.get("history") or []
-    if history:
-        chart = pd.DataFrame(
-            {
-                "episode": [h.get("episode") for h in history],
-                "reward": [h.get("reward") for h in history],
-            }
-        )
-        st.subheader("Episode rewards")
-        st.line_chart(chart.set_index("episode"))
-    else:
-        st.caption("No `history` yet — run a training job with a working trainer.")
+    st.divider()
+    st.caption("While training is **running**, the section below refreshes on its own (other tabs stay responsive).")
+    _training_status_fragment(client)
 
 
 def main() -> None:
@@ -383,11 +403,10 @@ def main() -> None:
     # `api_base` is owned by the text_input below — never assign to it after that widget.
     st.sidebar.text_input("API base URL", key="api_base")
     client = APIClient(sm.api_base)
-    if sm.training_state == "running":
-        poll_n = st_autorefresh(interval=2000, limit=100, key="soc_train_poll")
-        st.session_state["training_poll_count"] = int(poll_n)
-    else:
-        st.session_state["training_poll_count"] = 0
+    st.sidebar.caption("If the UI ever freezes, clear busy and reload.")
+    if st.sidebar.button("Clear busy / reset loading", key="btn_clear_busy"):
+        st.session_state["loading"] = False
+        st.rerun()
 
     st.sidebar.caption("Heartbeat")
     try:
