@@ -380,16 +380,14 @@ def main() -> None:
     )
     _soc_global_css()
     sm = StateManager()
-    if "api_base" not in st.session_state:
-        st.session_state.api_base = os.environ.get("SOC_API_BASE", "http://127.0.0.1:7860")
+    # `api_base` is owned by the text_input below — never assign to it after that widget.
     st.sidebar.text_input("API base URL", key="api_base")
-    sm.api_base = st.session_state.api_base
+    client = APIClient(sm.api_base)
     if sm.training_state == "running":
         poll_n = st_autorefresh(interval=2000, limit=100, key="soc_train_poll")
         st.session_state["training_poll_count"] = int(poll_n)
     else:
         st.session_state["training_poll_count"] = 0
-    client = APIClient(sm.api_base)
 
     st.sidebar.caption("Heartbeat")
     try:

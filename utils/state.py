@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
@@ -24,7 +25,9 @@ class StateManager:
         st.session_state["training_state"] = "idle"
         st.session_state["training_poll_count"] = 0
         st.session_state["last_observation"] = None
-        st.session_state["api_base"] = st.session_state.get("api_base") or "http://127.0.0.1:7860"
+        st.session_state.setdefault(
+            "api_base", os.environ.get("SOC_API_BASE", "http://127.0.0.1:7860")
+        )
 
     @property
     def episode_id(self) -> Optional[str]:
@@ -80,11 +83,8 @@ class StateManager:
 
     @property
     def api_base(self) -> str:
-        return str(st.session_state.get("api_base", "http://127.0.0.1:7860"))
-
-    @api_base.setter
-    def api_base(self, v: str) -> None:
-        st.session_state.api_base = v.rstrip("/")
+        """Read-only: value comes from the sidebar `text_input` with key ``api_base``."""
+        return str(st.session_state.get("api_base", "http://127.0.0.1:7860")).rstrip("/")
 
     def sync_transcript(
         self, transcript: List[Dict[str, Any]], cap: int = 5000
