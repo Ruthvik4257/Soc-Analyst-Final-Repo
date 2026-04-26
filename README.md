@@ -33,7 +33,9 @@ The agent can query internal tools using:
 - `server/environment.py`: Single-agent, multi-agent, and campaign environment logic.
 - `server/rl_trainer.py`: PPO training loop and training report generation.
 - `server/app.py`: API routes for environment interaction, training, and metrics.
-- `frontend/index.html`: UI for triage, integrations, and training dashboard.
+- `frontend/index.html`: Legacy static UI (optional; OpenAPI and API still available under documented paths).
+- `streamlit_app.py`, `utils/`, `.streamlit/config.toml`: SOC dark-mode Streamlit console (primary UI in Docker Space).
+- `docker/entrypoint.sh`, `docker/nginx.conf.template`: Nginx reverse proxy so the Space serves Streamlit on `/` and FastAPI on `/api/`, `/docs`, `/healthz`, OpenEnv routes, etc.
 
 ## Usage
 1. Provide credentials if needed:
@@ -49,6 +51,12 @@ The agent can query internal tools using:
 ## Hugging Face Space Deployment
 
 This repository is configured as a Docker Space (`sdk: docker`).
+
+The container exposes a **single public port** (`PORT`, default **7860**). **nginx** listens there and routes:
+- **`/`** → Streamlit SOC console (server-side API calls use `SOC_API_BASE=http://127.0.0.1:8000`).
+- **`/api/*`**, **`/healthz`**, **`/docs`**, **`/redoc`**, **`/openapi.json`**, OpenEnv **`/reset`**, **`/step`**, **`/state`**, **`/schema`**, **`/metadata`**, **`/health`**, **`/mcp`**, **`/ws`**, etc. → **FastAPI** (uvicorn on 127.0.0.1:8000).
+
+Init uses **tini** so child processes are reaped. First boot can take **several minutes** on CPU while PyTorch and the app import; the entrypoint waits up to ~5 minutes for `GET /healthz` before starting nginx and Streamlit.
 
 ### 1) Push this repo to a Hugging Face Space
 - Create a Space.

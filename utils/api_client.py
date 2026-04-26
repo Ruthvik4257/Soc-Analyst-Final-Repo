@@ -75,6 +75,10 @@ class APIClient:
         self.retry_backoff_s = retry_backoff_s
         self._session = requests.Session()
 
+    @property
+    def api_base(self) -> str:
+        return self.base_url
+
     def _request(
         self,
         method: str,
